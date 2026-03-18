@@ -49,8 +49,8 @@ static unique_ptr<FunctionData> DuckDBTriggersBind(ClientContext &context, Table
 	names.emplace_back("columns");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
-	names.emplace_back("for_each_row");
-	return_types.emplace_back(LogicalType::BOOLEAN);
+	names.emplace_back("for_each");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("comment");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -91,6 +91,17 @@ static string TriggerTimingToString(TriggerTiming timing) {
 	}
 }
 
+static string TriggerForEachToString(TriggerForEach for_each) {
+	switch (for_each) {
+	case TriggerForEach::ROW:
+		return "ROW";
+	case TriggerForEach::STATEMENT:
+		return "STATEMENT";
+	default:
+		return "UNKNOWN";
+	}
+}
+
 static string TriggerEventTypeToString(TriggerEventType event_type) {
 	switch (event_type) {
 	case TriggerEventType::INSERT_EVENT:
@@ -125,7 +136,7 @@ void DuckDBTriggersFunction(ClientContext &context, TableFunctionInput &data_p, 
 		output.SetValue(col++, count, Value(TriggerTimingToString(trigger.timing)));
 		output.SetValue(col++, count, Value(TriggerEventTypeToString(trigger.event_type)));
 		output.SetValue(col++, count, Value(StringUtil::Join(trigger.columns, ", ")));
-		output.SetValue(col++, count, Value::BOOLEAN(trigger.for_each_row));
+		output.SetValue(col++, count, Value(TriggerForEachToString(trigger.for_each)));
 		output.SetValue(col++, count, Value(trigger.comment));
 		output.SetValue(col++, count, Value::MAP(trigger.tags));
 		output.SetValue(col++, count, Value::BOOLEAN(trigger.temporary));

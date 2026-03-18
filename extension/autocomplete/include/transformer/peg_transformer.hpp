@@ -603,6 +603,7 @@ private:
 	// create_trigger.gram
 	static unique_ptr<CreateStatement> TransformCreateTriggerStmt(PEGTransformer &transformer,
 	                                                              optional_ptr<ParseResult> parse_result);
+	static TriggerForEach TransformForEachClause(PEGTransformer &transformer, optional_ptr<ParseResult> parse_result);
 	static TriggerTiming TransformTriggerTiming(PEGTransformer &transformer, optional_ptr<ParseResult> parse_result);
 	static TriggerEventInfo TransformTriggerEvent(PEGTransformer &transformer, optional_ptr<ParseResult> parse_result);
 	static TriggerEventInfo TransformTriggerEventInsert(PEGTransformer &transformer,

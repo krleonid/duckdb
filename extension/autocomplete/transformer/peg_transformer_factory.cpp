@@ -320,6 +320,7 @@ void PEGTransformerFactory::RegisterCreateView() {
 
 void PEGTransformerFactory::RegisterCreateTrigger() {
 	REGISTER_TRANSFORM(TransformCreateTriggerStmt);
+	REGISTER_TRANSFORM(TransformForEachClause);
 	REGISTER_TRANSFORM(TransformTriggerTiming);
 	REGISTER_TRANSFORM(TransformTriggerEvent);
 	REGISTER_TRANSFORM(TransformTriggerEventInsert);
@@ -923,6 +924,8 @@ void PEGTransformerFactory::RegisterEnums() {
 	RegisterEnum<TriggerTiming>("TriggerBefore", TriggerTiming::BEFORE);
 	RegisterEnum<TriggerTiming>("TriggerAfter", TriggerTiming::AFTER);
 	RegisterEnum<TriggerTiming>("TriggerInsteadOf", TriggerTiming::INSTEAD_OF);
+	RegisterEnum<TriggerForEach>("ForEachRow", TriggerForEach::ROW);
+	RegisterEnum<TriggerForEach>("ForEachStatement", TriggerForEach::STATEMENT);
 
 	RegisterEnum<string>("MinValue", "minvalue");
 	RegisterEnum<string>("MaxValue", "maxvalue");
