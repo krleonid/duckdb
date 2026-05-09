@@ -115,6 +115,20 @@ public:
 	idx_t NextEvictionSequenceNumber() {
 		return ++eviction_seq_num;
 	}
+	//! Returns true if the block needs to be added to the eviction queue.
+	//! A block needs insertion when it has no valid entry in the queue (freshly loaded from disk).
+	//! Once added, the entry remains valid across pin/unpin cycles until the block is evicted.
+	bool NeedsEvictionQueueInsertion() const {
+		return needs_eviction_queue_insert.load(std::memory_order_relaxed);
+	}
+	//! Marks the block as needing eviction queue insertion (called when loaded from disk).
+	void MarkNeedsEvictionQueueInsert() {
+		needs_eviction_queue_insert.store(true, std::memory_order_relaxed);
+	}
+	//! Clears the flag (called after successfully adding to the eviction queue).
+	void ClearNeedsEvictionQueueInsert() {
+		needs_eviction_queue_insert.store(false, std::memory_order_relaxed);
+	}
 	//! Get the LRU timestamp.
 	int64_t GetLRUTimestamp() const {
 		return lru_timestamp_msec;
@@ -213,6 +227,9 @@ private:
 	unique_ptr<FileBuffer> buffer;
 	//! The internal eviction sequence number.
 	atomic<idx_t> eviction_seq_num;
+	//! Whether the block needs to be added to the eviction queue.
+	//! True when block has no valid queue entry (initial state, or after eviction/unload).
+	atomic<bool> needs_eviction_queue_insert {true};
 	//! The LRU timestamp for age-based eviction.
 	atomic<int64_t> lru_timestamp_msec;
 	//! When to destroy the data buffer.

@@ -233,6 +233,7 @@ BufferHandle BlockHandle::Load(QueryContext context, unique_ptr<FileBuffer> reus
 	}
 	memory.SetState(BlockState::BLOCK_LOADED);
 	memory.SetReaders(1);
+	memory.MarkNeedsEvictionQueueInsert();
 	return BufferHandle(shared_from_this(), memory.GetBuffer());
 }
 

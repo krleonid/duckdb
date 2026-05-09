@@ -58,11 +58,11 @@ shared_ptr<BlockMemory> BufferEvictionNode::TryGetBlockMemory() {
 		// The block memory has been destroyed.
 		return nullptr;
 	}
-	if (!CanUnload(*shared_memory_p)) {
-		// The memory handle was used in between.
+	if (handle_sequence_number != shared_memory_p->GetEvictionSequenceNumber()) {
+		// A newer queue entry supersedes this one.
 		return nullptr;
 	}
-	// The node is the latest node in the queue with this memory.
+	// The node is the latest entry in the queue for this memory.
 	return shared_memory_p;
 }
 
@@ -273,6 +273,13 @@ bool BufferPool::AddToEvictionQueue(shared_ptr<BlockHandle> &handle) {
 	// The block handle is locked during this operation (Unpin),
 	// or the block handle is still a local variable (ConvertToPersistent)
 	D_ASSERT(memory.GetReaders() == 0);
+
+	// If the block was not pinned since it was last added to the eviction queue,
+	// its previous queue entry is still valid — skip re-insertion to avoid creating dead nodes.
+	if (!memory.NeedsEvictionQueueInsertion()) {
+		return false;
+	}
+
 	auto ts = memory.NextEvictionSequenceNumber();
 	if (track_eviction_timestamps) {
 		memory.SetLRUTimestamp(std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now())
@@ -287,6 +294,7 @@ bool BufferPool::AddToEvictionQueue(shared_ptr<BlockHandle> &handle) {
 
 	// Get the eviction queue for the block and add it
 	BufferEvictionNode node(handle->GetMemoryWeak(), ts);
+	memory.ClearNeedsEvictionQueueInsert();
 	return queue.AddToEvictionQueue(std::move(node));
 }
 
@@ -468,7 +476,7 @@ void EvictionQueue::IterateUnloadableBlocks(FN fn) {
 		}
 
 		// get a reference to the underlying block pointer
-		auto handle = node.TryGetBlockMemory();
+		auto handle = node.memory_p.lock();
 		if (debug_sleep_micros > 0) {
 			// Debug race conditions regarding the ownership of the BlockMemory.
 			// Note that for this to trigger we need at least one purge iteration with the setting active.
@@ -482,8 +490,13 @@ void EvictionQueue::IterateUnloadableBlocks(FN fn) {
 		// we might be able to free this block: grab the mutex and check if we can free it
 		auto lock = handle->GetLock();
 		if (!node.CanUnload(*handle)) {
-			// something changed in the mean-time, bail out
-			DecrementDeadNodes();
+			if (node.handle_sequence_number == handle->GetEvictionSequenceNumber()) {
+				// The entry was valid (seq_num matches) but the block can't be evicted right now.
+				// Mark it for re-insertion on the next unpin since we consumed its queue entry.
+				handle->MarkNeedsEvictionQueueInsert();
+			} else {
+				DecrementDeadNodes();
+			}
 			continue;
 		}
 
