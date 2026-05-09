@@ -398,8 +398,11 @@ unique_ptr<QueryResult> ClientContext::FetchResultInternal(ClientContextLock &lo
 	D_ASSERT(executor.HasResultCollector());
 	// we have a result collector - fetch the result directly from the result collector
 	result = executor.GetResult();
+	auto &profiler = QueryProfiler::Get(*this);
 	if (!create_stream_result) {
+		profiler.StartPhase(MetricType::CLEANUP);
 		CleanupInternal(lock, result.get(), false);
+		profiler.EndPhase();
 	} else {
 		active_query->SetOpenResult(*result);
 	}
@@ -633,7 +636,10 @@ ClientContext::PendingPreparedStatementInternal(ClientContextLock &lock,
 	// Get the result collector and initialize the executor.
 	auto collector = get_collector(*this, statement_data);
 	D_ASSERT(collector->type == PhysicalOperatorType::RESULT_COLLECTOR);
+	auto &profiler = QueryProfiler::Get(*this);
+	profiler.StartPhase(MetricType::EXECUTOR_INITIALIZE);
 	executor.Initialize(std::move(collector));
+	profiler.EndPhase();
 
 	auto types = executor.GetTypes();
 	D_ASSERT(types == statement_data.types);
