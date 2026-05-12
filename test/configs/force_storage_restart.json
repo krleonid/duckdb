@@ -46,6 +46,12 @@
         "test/sql/catalog/dependencies/test_drop_column_sequence_dependency.test",
         "test/sql/catalog/dependencies/test_set_default_sequence_dependency.test"
       ]
+    },
+    {
+      "reason": "Tests transient segment structure before checkpoint. force_restart checkpoints after every statement, merging segments.",
+      "paths": [
+        "test/sql/storage/adaptive_segment_allocation.test"
+      ]
     }
   ]
 }
