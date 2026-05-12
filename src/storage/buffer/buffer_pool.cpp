@@ -116,7 +116,6 @@ public:
 	}
 
 private:
-
 public:
 	//! The type of the buffers in this queue and helper function (both for verification only)
 	const vector<FileBufferType> file_buffer_types;
