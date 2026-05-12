@@ -16,6 +16,7 @@
 #include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/storage/buffer/block_handle.hpp"
+#include "duckdb/storage/buffer/temporary_file_information.hpp"
 
 namespace duckdb {
 
@@ -32,6 +33,7 @@ struct BufferEvictionNode {
 	idx_t handle_sequence_number;
 
 	bool CanUnload(BlockMemory &memory);
+	bool IsDeadNode();
 	shared_ptr<BlockMemory> TryGetBlockMemory();
 };
 
@@ -66,6 +68,8 @@ public:
 	virtual idx_t GetQueryMaxMemory() const;
 
 	TemporaryMemoryManager &GetTemporaryMemoryManager();
+
+	vector<EvictionQueueInformation> GetEvictionQueueInfo() const;
 
 	//! Take per-database ObjectCache under buffer pool's memory management.
 	//! Notice, object cache should be registered for at most once, otherwise InvalidInput exception is thrown.

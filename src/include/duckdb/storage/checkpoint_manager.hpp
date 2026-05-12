@@ -22,6 +22,33 @@ class SequenceCatalogEntry;
 class TableCatalogEntry;
 class ViewCatalogEntry;
 class TypeCatalogEntry;
+class Connection;
+class DuckTransaction;
+class DuckTransactionManager;
+struct CheckpointOptions;
+
+//! Wrapper to manage the lifetime of a checkpoint connection and transaction.
+class ActiveCheckpointWrapper {
+public:
+	//! Creates a connection if we have a context.
+	//! If there is no context, we are on shutdown and a checkpoint connection/transaction is not created.
+	ActiveCheckpointWrapper(optional_ptr<ClientContext> context, AttachedDatabase &db,
+	                        DuckTransactionManager &transaction_manager);
+
+	~ActiveCheckpointWrapper();
+
+	//! Begin the transaction within the newly created connection.
+	void GetCheckpointTransaction(CheckpointOptions &options);
+	void Commit();
+	bool HasCheckpointContext() const;
+
+private:
+	AttachedDatabase &db;
+	DuckTransactionManager &transaction_manager;
+	unique_ptr<Connection> checkpoint_connection;
+	optional_ptr<ClientContext> checkpoint_context;
+	optional_ptr<DuckTransaction> checkpoint_transaction;
+};
 
 class CheckpointWriter {
 public:

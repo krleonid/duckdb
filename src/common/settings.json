@@ -16,6 +16,13 @@
         ]
     },
     {
+        "name": "adaptive_segment_allocation",
+        "description": "When enabled, transient column segments start small and double in size with each overflow, up to the block size",
+        "type": "BOOLEAN",
+        "default_scope": "global",
+        "default_value": "false"
+    },
+    {
         "name": "allocator_background_threads",
         "description": "Whether to enable the allocator background thread.",
         "type": "BOOLEAN",
@@ -199,6 +206,13 @@
         "type": "UBIGINT",
         "default_scope": "global",
         "default_value": "100"
+    },
+    {
+        "name": "checkpoint_on_detach",
+        "description": "Override checkpoint behavior when detaching a database. ENABLED always checkpoints, DISABLED never checkpoints, DEFAULT defers to the global checkpoint_on_shutdown setting.",
+        "type": "ENUM<CheckpointOnDetach>",
+        "default_scope": "local",
+        "default_value": "DEFAULT"
     },
     {
         "name": "checkpoint_threshold",
@@ -734,6 +748,13 @@
         "on_callbacks": [
             "set"
         ]
+    },
+    {
+        "name": "initial_segment_rows",
+        "description": "Number of rows allocated for the first transient column segment when adaptive_segment_allocation is enabled. Subsequent segments double this until reaching the block size.",
+        "type": "UBIGINT",
+        "default_scope": "global",
+        "default_value": "2048"
     },
     {
         "name": "integer_division",
