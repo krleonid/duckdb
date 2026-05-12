@@ -33,6 +33,7 @@ struct BufferEvictionNode {
 	idx_t handle_sequence_number;
 
 	bool CanUnload(BlockMemory &memory);
+	bool IsDeadNode();
 	shared_ptr<BlockMemory> TryGetBlockMemory();
 };
 
