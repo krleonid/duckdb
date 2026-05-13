@@ -194,6 +194,8 @@ void EvictionQueue::Purge(const DatabaseInstance &db) {
 	// 2.3. We've purged the entire queue: max_purges is zero. This is a worst-case scenario,
 	// guaranteeing that we always exit the loop.
 
+	idx_t initial_q_size = approx_q_size;
+	idx_t initial_dead_nodes = total_dead_nodes;
 	idx_t max_purges = approx_q_size / purge_size;
 	idx_t initial_max_purges = max_purges;
 	while (max_purges != 0) {
@@ -224,8 +226,11 @@ void EvictionQueue::Purge(const DatabaseInstance &db) {
 	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - purge_start).count();
 	if (iterations > 10 || elapsed_ms > 1000) {
 		DUCKDB_LOG_WARNING(db,
-		                   "EvictionQueue::Purge took %lldms with %llu iterations, queue_size=%llu, dead_nodes=%llu",
-		                   elapsed_ms, iterations, q.size_approx(), (idx_t)total_dead_nodes);
+		                   "EvictionQueue::Purge took %lldms with %llu iterations, "
+		                   "queue_size_before=%llu, queue_size_after=%llu, "
+		                   "dead_nodes_before=%llu, dead_nodes_after=%llu",
+		                   elapsed_ms, iterations, initial_q_size, q.size_approx(),
+		                   initial_dead_nodes, (idx_t)total_dead_nodes);
 	}
 }
 
