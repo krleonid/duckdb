@@ -68,6 +68,18 @@ shared_ptr<BlockMemory> BufferEvictionNode::TryGetBlockMemory() {
 	return shared_memory_p;
 }
 
+bool BufferEvictionNode::IsDeadNode() {
+	auto shared_memory_p = memory_p.lock();
+	if (!shared_memory_p) {
+		return true;
+	}
+	if (handle_sequence_number != shared_memory_p->GetEvictionSequenceNumber()) {
+		return true;
+	}
+	return false;
+}
+
+
 typedef duckdb_moodycamel::ConcurrentQueue<BufferEvictionNode> eviction_queue_t;
 
 struct EvictionQueue {
@@ -235,15 +247,19 @@ void EvictionQueue::Purge(const DatabaseInstance &db) {
 	}
 
 	idx_t iterations = initial_max_purges - max_purges;
+	idx_t total_alive_found = alive_nodes_to_reenqueue.size();
+	idx_t total_dead_found = initial_dead_nodes - total_dead_nodes;
 	auto elapsed_ms =
 	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - purge_start).count();
 	if (iterations > 10 || elapsed_ms > 1000) {
 		DUCKDB_LOG_WARNING(db,
 		                   "EvictionQueue::Purge took %lldms with %llu iterations, "
 		                   "queue_size_before=%llu, queue_size_after=%llu, "
-		                   "dead_nodes_before=%llu, dead_nodes_after=%llu",
+		                   "dead_nodes_before=%llu, dead_nodes_after=%llu, "
+		                   "total_dequeued=%llu (alive=%llu, dead=%llu)",
 		                   elapsed_ms, iterations, initial_q_size, q.size_approx(),
-		                   initial_dead_nodes, (idx_t)total_dead_nodes);
+		                   initial_dead_nodes, (idx_t)total_dead_nodes,
+		                   total_alive_found + total_dead_found, total_alive_found, total_dead_found);
 	}
 }
 
@@ -263,14 +279,13 @@ void EvictionQueue::PurgeIteration(const idx_t purge_size, vector<BufferEviction
 	auto debug_sleep_micros = debug_eviction_queue_sleep.load(std::memory_order_relaxed);
 	for (idx_t i = 0; i < actually_dequeued; i++) {
 		auto &node = purge_nodes[i];
-		auto handle = node.TryGetBlockMemory();
 		if (debug_sleep_micros > 0) {
 			ThreadUtil::SleepMicroSeconds(debug_sleep_micros);
 		}
-		if (handle) {
-			alive_nodes_out.push_back(std::move(node));
-		} else {
+		if (node.IsDeadNode()) {
 			dead_count++;
+		} else {
+			alive_nodes_out.push_back(std::move(node));
 		}
 	}
 
