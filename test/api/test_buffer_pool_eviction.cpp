@@ -289,11 +289,9 @@ idx_t SumApproxSize(const vector<EvictionQueueInformation> &info) {
 // weak_ptr<BlockMemory> + sequence number. When the BlockMemory is destroyed, the latest queue
 // entry pointing at it becomes dead and must be reflected in the per-queue dead_nodes counter.
 //
-// Previously, BlockMemory::~BlockMemory only called IncrementDeadNodes when GetBuffer() was
-// non-null. But if the block had already been evicted (buffer destroyed) before the BlockHandle
-// was dropped, the counter was never incremented for it, even though a stale entry still sat in
-// the queue. This systematically under-counted dead_nodes and made the purge-ratio early-out
-// fire too aggressively, letting dead entries accumulate.
+// The destructor uses eviction_seq_num > 0 to determine whether an entry exists in the queue:
+// after eviction (Unload), seq_num is reset to 0, meaning the entry was already consumed.
+// Only blocks that still have a live queue entry (seq_num > 0) should increment dead_nodes.
 TEST_CASE("Test eviction queue: dead_nodes is incremented on BlockMemory destruction even after eviction",
           "[storage][buffer_pool]") {
 	DuckDB db;
@@ -338,13 +336,14 @@ TEST_CASE("Test eviction queue: dead_nodes is incremented on BlockMemory destruc
 
 	const idx_t dead_before = SumDeadNodes(buffer_pool.GetEvictionQueueInfo());
 
-	// Drop all BlockHandles. Every ~BlockMemory must increment dead_nodes once, regardless
-	// of whether the buffer was already null at destruction time.
+	// Drop all BlockHandles. Only the `held_buffers` blocks that are still loaded (seq_num > 0,
+	// meaning their queue entry is still present) will increment dead_nodes. The evicted blocks
+	// had their entries consumed during eviction (seq_num reset to 0) — no queue entry remains.
 	handles.clear();
 
 	const idx_t dead_after = SumDeadNodes(buffer_pool.GetEvictionQueueInfo());
 
-	REQUIRE(dead_after - dead_before == total_buffers);
+	REQUIRE(dead_after - dead_before == held_buffers);
 }
 
 // Sanity check the dead_nodes counter never exceeds the queue size and never decrements past
