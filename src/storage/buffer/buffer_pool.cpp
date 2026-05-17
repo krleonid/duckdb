@@ -86,7 +86,7 @@ struct EvictionQueue {
 public:
 	explicit EvictionQueue(const vector<FileBufferType> &file_buffer_types_p)
 	    : file_buffer_types(file_buffer_types_p), debug_eviction_queue_sleep(0), evict_queue_insertions(0),
-	      total_dead_nodes(0) {
+	      total_dead_nodes(0), purge_consumer_token(q), purge_producer_token(q) {
 	}
 
 public:
@@ -96,7 +96,8 @@ public:
 	//! Tries to dequeue an element from the eviction queue, but only after acquiring the purge queue lock.
 	bool TryDequeueWithLock(BufferEvictionNode &node);
 	//! Garbage collect dead nodes in the eviction queue.
-	void Purge();
+	//! When full_purge is true, skip early-out conditions and process the entire queue.
+	void Purge(bool full_purge = false);
 	template <typename FN>
 	void IterateUnloadableBlocks(FN fn);
 
@@ -122,8 +123,9 @@ public:
 	}
 
 private:
-	//! Bulk purge dead nodes from the eviction queue. Then, enqueue those that are still alive.
-	void PurgeIteration(const idx_t purge_size, vector<BufferEvictionNode> &alive_nodes_out);
+	//! Dequeue a batch via consumer token, drop dead nodes, re-enqueue alive nodes
+	//! via producer token.
+	void PurgeIterationWithTokens(const idx_t purge_size);
 
 public:
 	//! The type of the buffers in this queue and helper function (both for verification only)
@@ -157,6 +159,15 @@ private:
 	mutex purge_lock;
 	//! A pre-allocated vector of eviction nodes. We reuse this to keep the allocation overhead of purges small.
 	vector<BufferEvictionNode> purge_nodes;
+	//! Consumer token for full_purge: ensures forward progress through sub-queues.
+	eviction_queue_t::consumer_token_t purge_consumer_token;
+	//! Producer token for full_purge: alive nodes go into a dedicated sub-queue
+	//! that the consumer has already passed, avoiding re-processing.
+	eviction_queue_t::producer_token_t purge_producer_token;
+
+public:
+	//! Whether a background purge thread is currently running for this queue.
+	atomic<bool> purge_in_flight {false};
 };
 
 bool EvictionQueue::AddToEvictionQueue(BufferEvictionNode &&node) {
@@ -169,7 +180,7 @@ bool EvictionQueue::TryDequeueWithLock(BufferEvictionNode &node) {
 	return q.try_dequeue(node);
 }
 
-void EvictionQueue::Purge() {
+void EvictionQueue::Purge(bool full_purge) {
 	// only one thread purges the queue, all other threads early-out
 	unique_lock<mutex> guard(purge_lock, std::try_to_lock);
 	if (!guard.owns_lock()) {
@@ -188,81 +199,69 @@ void EvictionQueue::Purge() {
 		return;
 	}
 
-	// There are two types of situations.
-
-	// For most scenarios, purging INSERT_INTERVAL * PURGE_SIZE_MULTIPLIER nodes is enough.
-	// Purging more nodes than we insert also counters oscillation for scenarios where most nodes are dead.
-	// If we always purge slightly more, we trigger a purge less often, as we purge below the trigger.
-
-	// However, if the pressure on the queue becomes too contested, we need to purge more aggressively,
-	// i.e., we actively seek a specific number of dead nodes to purge. We use the total number of existing dead nodes.
-	// We detect this situation by observing the queue's ratio between alive vs. dead nodes. If the ratio of alive vs.
-	// dead nodes grows faster than we can purge, we keep purging until we hit one of the following conditions.
-
-	// 2.1. We're back at an approximate queue size less than purge_size * EARLY_OUT_MULTIPLIER.
-	// 2.2. We're back at a ratio of 1*alive_node:ALIVE_NODE_MULTIPLIER*dead_nodes.
-	// 2.3. We've purged the entire queue: max_purges is zero. This is a worst-case scenario,
-	// guaranteeing that we always exit the loop.
-
 	idx_t max_purges = approx_q_size / purge_size;
 
-	// Accumulate alive nodes across all iterations and re-enqueue once at the end.
-	// This prevents the purge thread from feeding alive nodes back into its own
-	// moodycamel sub-queue between iterations, which would cause subsequent
-	// try_dequeue_bulk calls to re-drain those same alive nodes instead of
-	// reaching dead entries in worker thread sub-queues.
-	vector<BufferEvictionNode> alive_nodes_to_reenqueue;
-
+	// Use consumer/producer tokens to avoid re-processing alive nodes.
+	// The consumer token progresses through sub-queues sequentially; alive nodes
+	// are re-enqueued via a dedicated producer token whose sub-queue is "behind"
+	// the consumer position, so they won't be revisited until a full wrap-around.
 	while (max_purges != 0) {
-		PurgeIteration(purge_size, alive_nodes_to_reenqueue);
+		PurgeIterationWithTokens(purge_size);
 
-		// The effective queue size includes alive nodes held in our buffer
-		approx_q_size = q.size_approx() + alive_nodes_to_reenqueue.size();
+		if (!full_purge) {
+			approx_q_size = q.size_approx();
 
-		// early-out according to (2.1)
-		if (approx_q_size < purge_size * EARLY_OUT_MULTIPLIER) {
-			break;
-		}
+			// early-out according to (2.1)
+			if (approx_q_size < purge_size * EARLY_OUT_MULTIPLIER) {
+				break;
+			}
 
-		idx_t approx_dead_nodes = total_dead_nodes;
-		approx_dead_nodes = approx_dead_nodes > approx_q_size ? approx_q_size : approx_dead_nodes;
-		idx_t approx_alive_nodes = approx_q_size - approx_dead_nodes;
+			idx_t approx_dead_nodes = total_dead_nodes;
+			approx_dead_nodes = approx_dead_nodes > approx_q_size ? approx_q_size : approx_dead_nodes;
+			idx_t approx_alive_nodes = approx_q_size - approx_dead_nodes;
 
-		// early-out according to (2.2)
-		if (approx_alive_nodes * (ALIVE_NODE_MULTIPLIER - 1) > approx_dead_nodes) {
-			break;
+			// early-out according to (2.2)
+			if (approx_alive_nodes * (ALIVE_NODE_MULTIPLIER - 1) > approx_dead_nodes) {
+				break;
+			}
 		}
 
 		max_purges--;
 	}
-
-	// Re-enqueue all alive nodes after the purge loop completes
-	if (!alive_nodes_to_reenqueue.empty()) {
-		q.enqueue_bulk(alive_nodes_to_reenqueue.begin(), alive_nodes_to_reenqueue.size());
-	}
 }
 
-void EvictionQueue::PurgeIteration(const idx_t purge_size, vector<BufferEvictionNode> &alive_nodes_out) {
-	// if this purge is significantly smaller or bigger than the previous purge, then
-	// we need to resize the purge_nodes vector. Note that this barely happens, as we
-	// purge queue_insertions * PURGE_SIZE_MULTIPLIER nodes
+void EvictionQueue::PurgeIterationWithTokens(const idx_t purge_size) {
 	idx_t previous_purge_size = purge_nodes.size();
 	if (purge_size < previous_purge_size / 2 || purge_size > previous_purge_size) {
 		purge_nodes.resize(purge_size);
 	}
 
-	// bulk purge
-	const idx_t actually_dequeued = q.try_dequeue_bulk(purge_nodes.begin(), purge_size);
+	// Dequeue using consumer token — progresses through sub-queues sequentially
+	const idx_t actually_dequeued = q.try_dequeue_bulk(purge_consumer_token, purge_nodes.begin(), purge_size);
+	if (actually_dequeued == 0) {
+		return;
+	}
 
 	idx_t dead_count = 0;
+	idx_t alive_count = 0;
 	auto debug_sleep_micros = debug_eviction_queue_sleep.load(std::memory_order_relaxed);
 	for (idx_t i = 0; i < actually_dequeued; i++) {
 		auto &node = purge_nodes[i];
 		if (node.IsDeadNode(debug_sleep_micros)) {
 			dead_count++;
 		} else {
-			alive_nodes_out.push_back(std::move(node));
+			// Move alive nodes to the front for bulk re-enqueue
+			if (alive_count != i) {
+				purge_nodes[alive_count] = std::move(node);
+			}
+			alive_count++;
 		}
+	}
+
+	// Re-enqueue alive nodes via producer token — goes into a dedicated sub-queue
+	// that the consumer token has already passed
+	if (alive_count > 0) {
+		q.enqueue_bulk(purge_producer_token, purge_nodes.begin(), alive_count);
 	}
 
 	total_dead_nodes -= dead_count;
@@ -521,7 +520,18 @@ void BufferPool::PurgeQueue(const BlockHandle &block) {
 	const auto queue_sleep_micros =
 	    Settings::Get<DebugEvictionQueueSleepMicroSecondsSetting>(buffer_manager.GetDatabase());
 	eviction_queue.debug_eviction_queue_sleep = queue_sleep_micros;
-	eviction_queue.Purge();
+	if (Settings::Get<BackgroundQueuePurgeSetting>(buffer_manager.GetDatabase())) {
+		bool expected = false;
+		if (eviction_queue.purge_in_flight.compare_exchange_strong(expected, true)) {
+			thread purge_thread([&eviction_queue]() {
+				eviction_queue.Purge(true);
+				eviction_queue.purge_in_flight.store(false);
+			});
+			purge_thread.detach();
+		}
+	} else {
+		eviction_queue.Purge();
+	}
 }
 
 void BufferPool::SetLimit(idx_t limit, const char *exception_postscript) {

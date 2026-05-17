@@ -469,6 +469,16 @@ struct DebugCheckpointSleepMsSetting {
 	static constexpr idx_t SettingIndex = 21;
 };
 
+struct BackgroundQueuePurgeSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "background_queue_purge";
+	static constexpr const char *Description = "Run eviction queue purge in a background thread instead of inline.";
+	static constexpr const char *InputType = "BOOLEAN";
+	static constexpr const char *DefaultValue = "false";
+	static constexpr SettingScopeTarget Scope = SettingScopeTarget::GLOBAL_ONLY;
+	static constexpr idx_t SettingIndex = 99;
+};
+
 struct DebugEvictionQueueSleepMicroSecondsSetting {
 	using RETURN_TYPE = idx_t;
 	static constexpr const char *Name = "debug_eviction_queue_sleep_micro_seconds";
@@ -1666,7 +1676,7 @@ struct ZstdMinStringLengthSetting {
 };
 
 struct GeneratedSettingInfo {
-	static constexpr idx_t MaxSettingIndex = 99;
+	static constexpr idx_t MaxSettingIndex = 100;
 };
 
 //===----------------------------------------------------------------------===//
