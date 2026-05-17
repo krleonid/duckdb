@@ -183,6 +183,13 @@
         }
     },
     {
+        "name": "background_queue_purge",
+        "description": "Run eviction queue purge in a background thread instead of inline.",
+        "type": "BOOLEAN",
+        "scope": "global",
+        "default_value": "false"
+    },
+    {
         "name": "block_allocator_memory",
         "description": "Physical memory that the block allocator is allowed to use (this memory is never freed and cannot be reduced).",
         "type": "VARCHAR",
