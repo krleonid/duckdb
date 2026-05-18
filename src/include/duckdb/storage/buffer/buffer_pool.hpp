@@ -34,6 +34,7 @@ struct BufferEvictionNode {
 
 	bool CanUnload(BlockMemory &memory);
 	shared_ptr<BlockMemory> TryGetBlockMemory();
+	bool IsDeadNode(idx_t debug_sleep_micros = 0);
 };
 
 //! The BufferPool is in charge of handling memory management for one or more databases. It defines memory limits

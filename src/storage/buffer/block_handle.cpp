@@ -34,8 +34,10 @@ BlockMemory::~BlockMemory() { // NOLINT: allow internal exceptions
 	// The block memory is being destroyed, meaning that any unswizzled pointers are now binary junk.
 	SetSwizzling(nullptr);
 	D_ASSERT(!GetBuffer() || GetBuffer()->GetBufferType() == GetBufferType());
-	if (GetBuffer() && GetBufferType() != FileBufferType::TINY_BUFFER) {
-		// Kill the latest version in the eviction queue.
+	if (GetEvictionSequenceNumber() > 0 && GetBufferType() != FileBufferType::TINY_BUFFER) {
+		// The eviction_seq_num is >0 only when there is an active entry in the queue for this
+		// block (it's reset to 0 on Unload/eviction). When this BlockMemory is destroyed with
+		// seq_num >0, that queue entry's weak_ptr will expire — mark it dead.
 		GetBufferManager().GetBufferPool().IncrementDeadNodes(*this);
 	}
 
