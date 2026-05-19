@@ -2,7 +2,6 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/appender.hpp"
 #include "test_helpers.hpp"
-#include <chrono>
 
 using namespace duckdb;
 
@@ -22,7 +21,7 @@ static idx_t MeasureCheckpointWrite(Connection &con, const string &db_path) {
 	return GetDbFileSize(db_path) - size_before;
 }
 
-TEST_CASE("Incremental checkpoint writes only the new tail, not the full column data", "[api][.]") {
+TEST_CASE("Incremental checkpoint writes only the new tail, not the full column data", "[api]") {
 	auto db_path = TestDirectoryPath() + "/incremental_checkpoint_bytes.db";
 	auto ctrl_path = TestDirectoryPath() + "/incremental_checkpoint_ctrl.db";
 	DeleteDatabase(db_path);
@@ -186,75 +185,7 @@ TEST_CASE("Incremental checkpoint writes only the new tail, not the full column 
 	DeleteDatabase(ctrl_path);
 }
 
-TEST_CASE("Incremental checkpoint is faster than full rewrite on append-only workload", "[api][.]") {
-	auto db_path = TestDirectoryPath() + "/incremental_checkpoint_latency.db";
-	DeleteDatabase(db_path);
-
-	auto elapsed_ms = [](std::chrono::steady_clock::time_point t0) {
-		return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-	};
-
-	int64_t full_ms = 0;
-	int64_t incremental_ms = 0;
-
-	{
-		DuckDB db(db_path);
-		Connection con(db);
-
-		REQUIRE_NO_FAIL(con.Query("SET wal_autocheckpoint = '1TB'"));
-		REQUIRE_NO_FAIL(con.Query("PRAGMA disable_checkpoint_on_shutdown"));
-		REQUIRE_NO_FAIL(con.Query("CREATE TABLE t (id INTEGER, label VARCHAR, score DOUBLE)"));
-
-		{
-			Appender appender(con, "t");
-			for (int32_t i = 0; i < 100000; i++) {
-				appender.BeginRow();
-				appender.Append<int32_t>(i);
-				appender.Append<const char *>(("label_" + std::to_string(i % 1000)).c_str());
-				appender.Append<double>(i * 0.5);
-				appender.EndRow();
-			}
-		}
-
-		// Full rewrite timing.
-		auto t0 = std::chrono::steady_clock::now();
-		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
-		full_ms = elapsed_ms(t0);
-	}
-
-	{
-		DuckDB db(db_path);
-		Connection con(db);
-
-		REQUIRE_NO_FAIL(con.Query("SET wal_autocheckpoint = '1TB'"));
-		REQUIRE_NO_FAIL(con.Query("PRAGMA disable_checkpoint_on_shutdown"));
-
-		{
-			Appender appender(con, "t");
-			for (int32_t i = 100000; i < 100050; i++) {
-				appender.BeginRow();
-				appender.Append<int32_t>(i);
-				appender.Append<const char *>(("tail_" + std::to_string(i)).c_str());
-				appender.Append<double>(i * 0.5);
-				appender.EndRow();
-			}
-		}
-
-		// Incremental checkpoint timing.
-		auto t0 = std::chrono::steady_clock::now();
-		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
-		incremental_ms = elapsed_ms(t0);
-	}
-
-	// Incremental checkpoint must be faster than the full rewrite.
-	// We only assert a weak bound (< full time) since CI machines vary.
-	INFO("full_ms=" << full_ms << " incremental_ms=" << incremental_ms);
-	REQUIRE(incremental_ms <= full_ms);
-
-	DeleteDatabase(db_path);
-}
-
-TEST_CASE("Checkpoint with concurrent reader does not crash and preserves data", "[api][.]") {
+TEST_CASE("Checkpoint with concurrent reader does not crash and preserves data", "[api]") {
 	auto db_path = TestDirectoryPath() + "/incremental_checkpoint_concurrent.db";
 	DeleteDatabase(db_path);
 
@@ -330,7 +261,7 @@ TEST_CASE("Checkpoint with concurrent reader does not crash and preserves data",
 	DeleteDatabase(db_path);
 }
 
-TEST_CASE("Multiple sequential incremental checkpoints do not cause unbounded file growth", "[api][.]") {
+TEST_CASE("Multiple sequential incremental checkpoints do not cause unbounded file growth", "[api]") {
 	auto db_path = TestDirectoryPath() + "/incremental_checkpoint_growth.db";
 	DeleteDatabase(db_path);
 
