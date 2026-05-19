@@ -134,6 +134,7 @@ public:
 
 	void InitializeEmpty(const vector<LogicalType> &types, ColumnDataType data_type);
 	bool HasChanges() const;
+	bool HasPendingDeletes() const;
 
 	//! Initialize a scan over this row_group
 	bool InitializeScan(CollectionScanState &state, SegmentNode<RowGroup> &node);

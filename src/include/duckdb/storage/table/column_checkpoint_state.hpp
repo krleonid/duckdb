@@ -50,6 +50,10 @@ public:
 	virtual void FlushSegment(unique_ptr<ColumnSegment> segment, BufferHandle handle, idx_t segment_size);
 	virtual PersistentColumnData ToPersistentData();
 
+	//! Converts every TRANSIENT segment in original_column to PERSISTENT in-place.
+	//! Called by the incremental-flush checkpoint path when no persistent segment has UPDATE nodes.
+	void FlushTransientSegmentsInPlace();
+
 	PartialBlockManager &GetPartialBlockManager() {
 		return partial_block_manager;
 	}

@@ -1,0 +1,157 @@
+# name: test/sql/storage/incremental_checkpoint_update.test
+# description: Regression tests for incremental checkpoint + UPDATE interactions.
+#   §2.1 – UPDATE on a newly-inserted (TRANSIENT) row must not be lost: the checkpointer
+#           must detect the update node and fall back to WriteToDisk.
+#   §2.3 – UPDATE that sets a column to NULL must also persist: the validity child column
+#           receives its own update node which HasOnlyTransientTail() must detect.
+# group: [storage]
+
+load {TEST_DIR}/inc_ckpt_update.db
+
+statement ok
+PRAGMA disable_checkpoint_on_shutdown;
+
+statement ok
+SET wal_autocheckpoint = '1TB';
+
+statement ok
+CREATE TABLE t (id INTEGER, val VARCHAR, n DOUBLE);
+
+statement ok
+INSERT INTO t SELECT i, 'init_' || i::VARCHAR, i * 1.0 FROM range(500) tbl(i);
+
+statement ok
+CHECKPOINT;
+
+query I
+SELECT COUNT(*) FROM t;
+----
+500
+
+# ────────────────────────────────────────────────────────────────────────────
+# §2.1 — UPDATE on a newly-inserted TRANSIENT row.
+#
+# After the INSERT the new row lives in a TRANSIENT segment.  The subsequent
+# UPDATE creates an update node keyed to that row.  HasOnlyTransientTail() must
+# detect the update node (HasUpdates() == true) and fall back to WriteToDisk so
+# the updated value actually reaches disk.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+INSERT INTO t VALUES (1000, 'before_update', 0.0);
+
+statement ok
+UPDATE t SET val = 'after_update', n = 42.0 WHERE id = 1000;
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query III
+SELECT id, val, n FROM t WHERE id = 1000;
+----
+1000	after_update	42.0
+
+query I
+SELECT COUNT(*) FROM t;
+----
+501
+
+# Old rows are untouched.
+query I
+SELECT val FROM t WHERE id = 0;
+----
+init_0
+
+# ────────────────────────────────────────────────────────────────────────────
+# §2.3 — UPDATE to NULL on a TRANSIENT row (validity child must be checkpointed).
+#
+# Setting val=NULL adds an update node to the VARCHAR column's data AND to the
+# corresponding validity child column.  StandardColumnData::HasOnlyTransientTail()
+# must check both, so both columns fall back to WriteToDisk.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+INSERT INTO t VALUES (2000, 'will_be_null', 1.0);
+
+statement ok
+CHECKPOINT;
+
+statement ok
+INSERT INTO t VALUES (2001, 'stays_non_null', 2.0);
+
+statement ok
+UPDATE t SET val = NULL WHERE id = 2001;
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT val IS NULL FROM t WHERE id = 2001;
+----
+true
+
+query I
+SELECT val FROM t WHERE id = 2000;
+----
+will_be_null
+
+query I
+SELECT COUNT(*) FROM t WHERE val IS NULL;
+----
+1
+
+# Roundtrip: update to non-NULL after a NULL
+statement ok
+INSERT INTO t VALUES (3000, NULL, 0.0);
+
+statement ok
+CHECKPOINT;
+
+statement ok
+INSERT INTO t VALUES (3001, NULL, 0.0);
+
+statement ok
+UPDATE t SET val = 'now_non_null' WHERE id = 3001;
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT val FROM t WHERE id = 3001;
+----
+now_non_null
+
+query I
+SELECT val IS NULL FROM t WHERE id = 3000;
+----
+true
+
+# ────────────────────────────────────────────────────────────────────────────
+# UPDATE on a PERSISTENT row (baseline: always uses WriteToDisk, not the new path).
+# Verify the existing path still works correctly after our changes.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+UPDATE t SET val = 'updated_persistent', n = 99.0 WHERE id = 250;
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query III
+SELECT id, val, n FROM t WHERE id = 250;
+----
+250	updated_persistent	99.0
+
+# Final count sanity check: 500 base + 1000 + 2000 + 2001 + 3000 + 3001 = 505 rows
+query I
+SELECT COUNT(*) FROM t;
+----
+505

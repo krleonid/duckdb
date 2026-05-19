@@ -77,6 +77,15 @@ private:
 	void DropSegments();
 	bool ValidityCoveredByBasedata(vector<CheckpointAnalyzeResult> &result);
 
+	//! Returns true when every checkpoint state's column qualifies for incremental flush:
+	//! no UpdateSegment is pending (checked via HasUpdates()), at least one persistent
+	//! segment exists, and only the transient tail needs writing.
+	bool HasOnlyTransientTail() const;
+	//! Incremental-flush path: converts transient tail segments to persistent in-place and
+	//! marks existing persistent blocks as checkpointed. Leaves has_changes=false so
+	//! FinalizeCheckpoint() fills data_pointers via WritePersistentSegments().
+	void FlushTransientTail();
+
 private:
 	vector<reference<ColumnCheckpointState>> &checkpoint_states;
 	StorageManager &storage_manager;

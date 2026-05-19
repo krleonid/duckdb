@@ -18,6 +18,7 @@
 #include "duckdb/common/enums/scan_vector_type.hpp"
 #include "duckdb/common/serializer/serialization_traits.hpp"
 #include "duckdb/common/atomic_ptr.hpp"
+#include "duckdb/common/enums/checkpoint_type.hpp"
 
 namespace duckdb {
 class ColumnData;
@@ -47,6 +48,7 @@ struct ColumnCheckpointInfo {
 public:
 	PartialBlockManager &GetPartialBlockManager();
 	CompressionType GetCompressionType();
+	CheckpointType GetCheckpointType();
 
 private:
 	RowGroupWriteInfo &info;
@@ -56,6 +58,7 @@ enum class ColumnDataType { MAIN_TABLE, INITIAL_TRANSACTION_LOCAL, TRANSACTION_L
 
 class ColumnData : public enable_shared_from_this<ColumnData> {
 	friend class ColumnDataCheckpointer;
+	friend struct ColumnCheckpointState;
 
 public:
 	ColumnData(BlockManager &block_manager, DataTableInfo &info, idx_t column_index, LogicalType type,
@@ -126,6 +129,9 @@ public:
 
 	//! Whether or not the column has ANY changes, including in child columns
 	virtual bool HasAnyChanges() const;
+	//! Returns true when the only changes are transient segments at the tail and no persistent segment has update
+	//! nodes. In that case we can flush the tail in-place without re-scanning the entire column.
+	virtual bool HasOnlyTransientTail() const;
 	//! Whether or not we can scan an entire vector
 	virtual ScanVectorType GetVectorScanType(ColumnScanState &state, idx_t scan_count, Vector &result);
 

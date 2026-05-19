@@ -112,6 +112,45 @@ bool ColumnData::HasAnyChanges() const {
 	return HasChanges();
 }
 
+bool ColumnData::HasOnlyTransientTail() const {
+	// UPDATE deltas are stored in the UpdateSegment keyed by absolute row offset,
+	// independent of whether the base row sits in a PERSISTENT or TRANSIENT segment.
+	// The full WriteToDisk path merges them via CheckpointScan; the incremental path
+	// must not be taken if any update is pending anywhere in this column.
+	if (HasUpdates()) {
+		return false;
+	}
+	bool has_persistent = false;
+	bool seen_transient = false;
+	idx_t segment_count = 0;
+	for (auto &segment_node : data.SegmentNodes()) {
+		auto &segment = segment_node.GetNode();
+		if (segment.segment_type == ColumnSegmentType::PERSISTENT) {
+			has_persistent = true;
+		} else {
+			seen_transient = true;
+			if (segment.count.load() == 0) {
+				// Empty transient segments cannot be flushed in-place; fall back to WriteToDisk.
+				return false;
+			}
+		}
+		segment_count++;
+	}
+	// Only worthwhile when there is existing persistent data; an all-transient column
+	// (brand-new table) is handled fine by the normal WriteToDisk path.
+	if (!has_persistent) {
+		return false;
+	}
+	// After many incremental flushes the column accumulates many small uncompressed
+	// persistent segments.  Force a full WriteToDisk for compaction once the segment
+	// count grows too large (each round adds ~1-2 segments per column).
+	static constexpr idx_t MAX_SEGMENTS_BEFORE_COMPACTION = 12;
+	if (segment_count > MAX_SEGMENTS_BEFORE_COMPACTION) {
+		return false;
+	}
+	return true;
+}
+
 idx_t ColumnData::GetMaxEntry() {
 	return count;
 }

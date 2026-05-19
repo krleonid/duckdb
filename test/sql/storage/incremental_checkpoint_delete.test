@@ -1,0 +1,164 @@
+# name: test/sql/storage/incremental_checkpoint_delete.test
+# description: Regression tests for incremental checkpoint + DELETE interactions.
+#   When a row group has deletions, HasChanges() returns true and the checkpointer
+#   must use WriteToDisk (not the transient-tail fast path).  Verify that deletions
+#   are preserved after restart and that subsequent inserts into the same table are
+#   also correctly checkpointed.
+# group: [storage]
+
+load {TEST_DIR}/inc_ckpt_delete.db
+
+statement ok
+PRAGMA disable_checkpoint_on_shutdown;
+
+statement ok
+SET wal_autocheckpoint = '1TB';
+
+statement ok
+CREATE TABLE t (id INTEGER, val VARCHAR);
+
+statement ok
+INSERT INTO t SELECT i, 'row_' || i::VARCHAR FROM range(1000) tbl(i);
+
+statement ok
+CHECKPOINT;
+
+query I
+SELECT COUNT(*) FROM t;
+----
+1000
+
+# ────────────────────────────────────────────────────────────────────────────
+# §D.1 — DELETE from persistent segment: incremental fast path must be skipped.
+#
+# After DELETE, RowGroup::HasChanges() returns true → HasOnlyTransientTail()
+# returns false → WriteToDisk path is taken.  Verify the deletion is honored
+# after restart.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+DELETE FROM t WHERE id = 500;
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT COUNT(*) FROM t WHERE id = 500;
+----
+0
+
+query I
+SELECT COUNT(*) FROM t;
+----
+999
+
+# Neighboring rows are unaffected.
+query I
+SELECT val FROM t WHERE id = 499;
+----
+row_499
+
+query I
+SELECT val FROM t WHERE id = 501;
+----
+row_501
+
+# ────────────────────────────────────────────────────────────────────────────
+# §D.2 — DELETE + INSERT in the same checkpoint cycle.
+#
+# DELETE forces WriteToDisk; new rows appended after the delete are also written
+# correctly by the full rewrite path.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+DELETE FROM t WHERE id = 1;
+
+statement ok
+INSERT INTO t VALUES (2000, 'new_after_delete');
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT COUNT(*) FROM t WHERE id = 1;
+----
+0
+
+query I
+SELECT val FROM t WHERE id = 2000;
+----
+new_after_delete
+
+query I
+SELECT COUNT(*) FROM t;
+----
+999
+
+# ────────────────────────────────────────────────────────────────────────────
+# §D.3 — Pure INSERT after a prior round that used WriteToDisk.
+#
+# After the DELETE-forced full rewrite, the next cycle is append-only and
+# should use the incremental fast path again.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+INSERT INTO t VALUES (3000, 'incremental_again');
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT val FROM t WHERE id = 3000;
+----
+incremental_again
+
+query I
+SELECT COUNT(*) FROM t;
+----
+1000
+
+# ────────────────────────────────────────────────────────────────────────────
+# §D.4 — DELETE all rows, then INSERT new batch.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+DELETE FROM t WHERE id >= 0;
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT COUNT(*) FROM t;
+----
+0
+
+statement ok
+INSERT INTO t SELECT i + 10000, 'fresh_' || i::VARCHAR FROM range(100) tbl(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT COUNT(*) FROM t;
+----
+100
+
+query I
+SELECT val FROM t WHERE id = 10000;
+----
+fresh_0
+
+query I
+SELECT val FROM t WHERE id = 10099;
+----
+fresh_99

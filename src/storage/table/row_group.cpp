@@ -1162,6 +1162,10 @@ CompressionType ColumnCheckpointInfo::GetCompressionType() {
 	return info.compression_types[column_idx];
 }
 
+CheckpointType ColumnCheckpointInfo::GetCheckpointType() {
+	return info.options.type;
+}
+
 vector<RowGroupWriteData> RowGroup::WriteToDisk(RowGroupWriteInfo &info,
                                                 const vector<const_reference<RowGroup>> &row_groups) {
 	vector<RowGroupWriteData> result;
@@ -1469,6 +1473,14 @@ RowGroupPointer RowGroup::Checkpoint(RowGroupWriteData write_data, RowGroupWrite
 	}
 	Verify();
 	return row_group_pointer;
+}
+
+bool RowGroup::HasPendingDeletes() const {
+	auto version_info_loaded = version_info.load();
+	if (version_info_loaded && version_info_loaded->HasUnserializedChanges()) {
+		return true;
+	}
+	return HasUnloadedDeletes();
 }
 
 bool RowGroup::HasChanges() const {

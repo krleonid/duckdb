@@ -409,6 +409,33 @@ struct CheckpointBlockIdMarker : public BlockIdVisitor {
 	BlockManager &manager;
 };
 
+bool ColumnDataCheckpointer::HasOnlyTransientTail() const {
+	for (idx_t i = 0; i < checkpoint_states.size(); i++) {
+		if (!checkpoint_states[i].get().original_column.HasOnlyTransientTail()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void ColumnDataCheckpointer::FlushTransientTail() {
+	// Checkpoint() set has_changes=true (there is a transient tail), but this path does NOT
+	// call WriteToDisk() — data_pointers will be filled by FinalizeCheckpoint() via
+	// WritePersistentSegments().  Reset has_changes so FinalizeCheckpoint() takes that path.
+	has_changes = false;
+
+	// Convert transient segments to persistent in-place for each checkpoint state.
+	for (idx_t i = 0; i < checkpoint_states.size(); i++) {
+		checkpoint_states[i].get().FlushTransientSegmentsInPlace();
+	}
+	// Mark all blocks (persistent originals + newly flushed) as checkpointed so they
+	// are not freed by the block manager during this checkpoint pass.
+	CheckpointBlockIdMarker marker(storage_manager.GetBlockManager());
+	for (idx_t i = 0; i < checkpoint_states.size(); i++) {
+		checkpoint_states[i].get().original_column.VisitBlockIds(marker);
+	}
+}
+
 void ColumnDataCheckpointer::Checkpoint() {
 	for (idx_t i = 0; i < checkpoint_states.size(); i++) {
 		auto &state = checkpoint_states[i];
@@ -429,6 +456,19 @@ void ColumnDataCheckpointer::Checkpoint() {
 			auto &col_data = state.get().original_column;
 			col_data.VisitBlockIds(marker);
 		}
+		return;
+	}
+
+	// Incremental-flush optimisation: when the only changes are new transient tail segments
+	// (Appender inserts), no column has a pending UpdateSegment, the row group has no
+	// pending deletes, and the checkpoint is a FULL_CHECKPOINT (no concurrent readers that
+	// may be pinning the old block handles), we avoid re-scanning and re-compressing all
+	// existing data.
+	// CONCURRENT_CHECKPOINT must use WriteToDisk() because ConvertToPersistent() mutates
+	// segment state (type, block handle) in place, which races with active scanners.
+	if (!row_group.HasPendingDeletes() && checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT &&
+	    HasOnlyTransientTail()) {
+		FlushTransientTail();
 		return;
 	}
 

@@ -1,0 +1,248 @@
+# name: test/sql/storage/incremental_checkpoint_types.test
+# description: Regression tests for incremental checkpoint with nested and wide types.
+#   LIST, STRUCT, ARRAY columns, NULLs in nested types, and wide VARCHAR with unique
+#   strings (exercises dictionary footprint) must all round-trip correctly through the
+#   incremental fast path.
+# group: [storage]
+
+load {TEST_DIR}/inc_ckpt_types.db
+
+statement ok
+PRAGMA disable_checkpoint_on_shutdown;
+
+statement ok
+SET wal_autocheckpoint = '1TB';
+
+# ────────────────────────────────────────────────────────────────────────────
+# §T.1 — LIST column
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+CREATE TABLE list_tbl (id INTEGER, items INTEGER[]);
+
+statement ok
+INSERT INTO list_tbl SELECT i, [i, i+1, i+2] FROM range(200) tbl(i);
+
+statement ok
+CHECKPOINT;
+
+statement ok
+INSERT INTO list_tbl VALUES (1000, [10, 20, 30]);
+
+statement ok
+INSERT INTO list_tbl VALUES (1001, NULL);
+
+statement ok
+INSERT INTO list_tbl VALUES (1002, []);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT items FROM list_tbl WHERE id = 1000;
+----
+[10, 20, 30]
+
+query I
+SELECT items IS NULL FROM list_tbl WHERE id = 1001;
+----
+true
+
+query I
+SELECT items FROM list_tbl WHERE id = 1002;
+----
+[]
+
+query I
+SELECT items FROM list_tbl WHERE id = 0;
+----
+[0, 1, 2]
+
+query I
+SELECT COUNT(*) FROM list_tbl;
+----
+203
+
+# ────────────────────────────────────────────────────────────────────────────
+# §T.2 — STRUCT column
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+CREATE TABLE struct_tbl (id INTEGER, s STRUCT(x INTEGER, y VARCHAR));
+
+statement ok
+INSERT INTO struct_tbl SELECT i, {'x': i, 'y': 'v_' || i::VARCHAR} FROM range(200) tbl(i);
+
+statement ok
+CHECKPOINT;
+
+statement ok
+INSERT INTO struct_tbl VALUES (2000, {'x': 99, 'y': 'hello'});
+
+statement ok
+INSERT INTO struct_tbl VALUES (2001, NULL);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT s FROM struct_tbl WHERE id = 2000;
+----
+{'x': 99, 'y': hello}
+
+query I
+SELECT s IS NULL FROM struct_tbl WHERE id = 2001;
+----
+true
+
+query I
+SELECT s.x FROM struct_tbl WHERE id = 0;
+----
+0
+
+query I
+SELECT COUNT(*) FROM struct_tbl;
+----
+202
+
+# ────────────────────────────────────────────────────────────────────────────
+# §T.3 — ARRAY column (fixed-size array)
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+CREATE TABLE array_tbl (id INTEGER, arr INTEGER[3]);
+
+statement ok
+INSERT INTO array_tbl SELECT i, [i, i*2, i*3] FROM range(200) tbl(i);
+
+statement ok
+CHECKPOINT;
+
+statement ok
+INSERT INTO array_tbl VALUES (3000, [7, 14, 21]);
+
+statement ok
+INSERT INTO array_tbl VALUES (3001, NULL);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT arr FROM array_tbl WHERE id = 3000;
+----
+[7, 14, 21]
+
+query I
+SELECT arr IS NULL FROM array_tbl WHERE id = 3001;
+----
+true
+
+query I
+SELECT arr FROM array_tbl WHERE id = 1;
+----
+[1, 2, 3]
+
+query I
+SELECT COUNT(*) FROM array_tbl;
+----
+202
+
+# ────────────────────────────────────────────────────────────────────────────
+# §T.4 — Wide VARCHAR: unique strings (exercises string dictionary footprint).
+#
+# Each row gets a globally-unique 100-character string so the VARCHAR dictionary
+# grows large.  The incremental path must correctly finalize the dictionary
+# (FinalizeAppend compacts the string buffer) and persist it.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+CREATE TABLE wide_str (id INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO wide_str
+    SELECT i, repeat('x', 80) || lpad(i::VARCHAR, 20, '0')
+    FROM range(500) tbl(i);
+
+statement ok
+CHECKPOINT;
+
+statement ok
+INSERT INTO wide_str
+    SELECT 1000 + i, repeat('y', 80) || lpad(i::VARCHAR, 20, '0')
+    FROM range(50) tbl(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT COUNT(*) FROM wide_str;
+----
+550
+
+# Spot-check a base row and a newly-appended row.
+query I
+SELECT length(s) FROM wide_str WHERE id = 0;
+----
+100
+
+query I
+SELECT s LIKE 'yyyyyyyyyyyyyyyyyyyy%' FROM wide_str WHERE id = 1000;
+----
+true
+
+# ────────────────────────────────────────────────────────────────────────────
+# §T.5 — Nested NULLs: LIST of structs with NULL elements.
+# ────────────────────────────────────────────────────────────────────────────
+
+statement ok
+CREATE TABLE nested_null (id INTEGER, data STRUCT(a INTEGER, b VARCHAR)[]);
+
+statement ok
+INSERT INTO nested_null VALUES
+    (1, [{'a': 1, 'b': 'one'}, {'a': 2, 'b': 'two'}]),
+    (2, NULL),
+    (3, [NULL, {'a': 3, 'b': 'three'}]);
+
+statement ok
+CHECKPOINT;
+
+statement ok
+INSERT INTO nested_null VALUES (4, [{'a': 4, 'b': 'four'}]);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT array_length(data) FROM nested_null WHERE id = 1;
+----
+2
+
+query I
+SELECT data IS NULL FROM nested_null WHERE id = 2;
+----
+true
+
+query I
+SELECT data[1] IS NULL FROM nested_null WHERE id = 3;
+----
+true
+
+query I
+SELECT data[1].b FROM nested_null WHERE id = 4;
+----
+four
+
+query I
+SELECT COUNT(*) FROM nested_null;
+----
+4

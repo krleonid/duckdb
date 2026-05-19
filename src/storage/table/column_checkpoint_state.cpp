@@ -221,6 +221,111 @@ void ColumnCheckpointState::FlushSegmentInternal(unique_ptr<ColumnSegment> segme
 	data_pointers.push_back(std::move(data_pointer));
 }
 
+void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
+	// NOTE: global_stats->Merge() is intentionally NOT called here.
+	// Stats merging is deferred to WritePersistentSegments(), which is invoked by
+	// FinalizeCheckpoint() after FlushTransientTail() returns with has_changes=false.
+	//
+	// Reset column-level stats to empty: WritePersistentSegments will accumulate fresh
+	// stats from segments into global_stats, and RowGroup::WriteToDisk will MergeStatistics
+	// into this column. Without the reset, that would be a self-merge (the column's stats
+	// already reflect all segments). Self-merge is idempotent for min/max but not guaranteed
+	// for all stat types (sketches, distinct counts).
+	if (original_column_mutable.stats) {
+		lock_guard<mutex> l(original_column_mutable.stats_lock);
+		original_column_mutable.stats->statistics = BaseStatistics::CreateEmpty(original_column.type);
+	}
+
+	auto &block_manager = partial_block_manager.GetBlockManager();
+	auto block_size = block_manager.GetBlockSize();
+	auto context = partial_block_manager.GetClientContext();
+	auto &db = original_column.GetDatabase();
+	auto &buffer_manager = BufferManager::GetBufferManager(db);
+
+	// Pack multiple small transient segments into shared blocks to avoid burning a
+	// full block per segment. Each entry records the segment reference and its
+	// offset within the shared block. The lead segment (index 0) owns the block
+	// buffer; follower data is memcpy'd in before ConvertToPersistent is called.
+	struct PackEntry {
+		ColumnSegment &segment;
+		uint32_t offset_in_block;
+		uint32_t actual_size;
+	};
+	vector<PackEntry> pack;
+	idx_t pack_used = 0;
+
+	auto flush_pack = [&]() {
+		if (pack.empty()) {
+			return;
+		}
+		auto &lead = pack[0].segment;
+		if (lead.SegmentSize() != block_size) {
+			D_ASSERT(lead.SegmentSize() < block_size);
+			lead.Resize(block_size);
+		}
+		// memcpy each follower's compacted data into the lead's buffer
+		if (pack.size() > 1) {
+			auto lead_pin = buffer_manager.Pin(lead.block);
+			for (idx_t i = 1; i < pack.size(); i++) {
+				auto &entry = pack[i];
+				auto src_pin = buffer_manager.Pin(entry.segment.block);
+				memcpy(lead_pin.GetDataMutable() + entry.offset_in_block, src_pin.Ptr(), entry.actual_size);
+			}
+		}
+		auto block_id = block_manager.GetFreeBlockId();
+		lead.ConvertToPersistent(context, &block_manager, block_id);
+		for (idx_t i = 1; i < pack.size(); i++) {
+			pack[i].segment.MarkAsPersistent(lead.block, pack[i].offset_in_block);
+			block_manager.IncreaseBlockReferenceCount(block_id);
+		}
+		pack.clear();
+		pack_used = 0;
+	};
+
+	// No data.Lock() is needed here: this path is only taken during FULL_CHECKPOINT,
+	// which guarantees exclusive access — no concurrent writers can modify the segment list.
+	bool seen_transient = false;
+	for (auto &segment_node : original_column_mutable.data.SegmentNodes()) {
+		auto &segment = segment_node.GetNode();
+		if (segment.segment_type != ColumnSegmentType::TRANSIENT) {
+			D_ASSERT(!seen_transient);
+			flush_pack();
+			continue;
+		}
+		seen_transient = true;
+		if (segment.count.load() == 0) {
+			continue;
+		}
+		if (segment.stats.statistics.IsConstant()) {
+			flush_pack();
+			segment.ConvertToPersistent(context, nullptr, INVALID_BLOCK);
+			continue;
+		}
+
+		// 3.3: call finalize_append to get actual used bytes (also compacts string dicts)
+		auto &func = segment.GetCompressionFunction();
+		idx_t actual_size = func.finalize_append ? func.finalize_append(segment, segment.stats) : segment.SegmentSize();
+		D_ASSERT(actual_size <= block_size);
+
+		if (actual_size >= block_size) {
+			// Full block: no packing benefit, write directly
+			flush_pack();
+			auto block_id = block_manager.GetFreeBlockId();
+			segment.ConvertToPersistent(context, &block_manager, block_id);
+			continue;
+		}
+
+		// 3.2: accumulate small segments; flush when the current block is full
+		if (pack_used + actual_size > block_size) {
+			flush_pack();
+		}
+		pack.push_back({segment, NumericCast<uint32_t>(pack_used), NumericCast<uint32_t>(actual_size)});
+		pack_used += actual_size;
+	}
+
+	flush_pack();
+}
+
 PersistentColumnData ColumnCheckpointState::ToPersistentData() {
 	auto &type = result_column ? result_column->type : original_column.type;
 	PersistentColumnData data(type);

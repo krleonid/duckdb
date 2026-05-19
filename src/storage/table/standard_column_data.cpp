@@ -314,6 +314,10 @@ bool StandardColumnData::HasAnyChanges() const {
 	return ColumnData::HasAnyChanges() || validity->HasAnyChanges();
 }
 
+bool StandardColumnData::HasOnlyTransientTail() const {
+	return ColumnData::HasOnlyTransientTail() && validity->HasOnlyTransientTail();
+}
+
 PersistentColumnData StandardColumnData::Serialize() {
 	auto persistent_data = ColumnData::Serialize();
 	persistent_data.child_columns.push_back(validity->Serialize());
