@@ -413,8 +413,8 @@ struct CheckpointBlockIdMarker : public BlockIdVisitor {
 };
 
 bool ColumnDataCheckpointer::HasOnlyTransientTail() const {
-	for (idx_t i = 0; i < checkpoint_states.size(); i++) {
-		if (!checkpoint_states[i].get().original_column.HasOnlyTransientTail()) {
+	for (auto &state : checkpoint_states) {
+		if (!state.get().original_column.HasOnlyTransientTail()) {
 			return false;
 		}
 	}

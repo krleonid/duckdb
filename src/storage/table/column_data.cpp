@@ -136,6 +136,13 @@ bool ColumnData::HasOnlyTransientTail() const {
 	return true;
 }
 
+void ColumnData::ResetStatistics() {
+	if (stats) {
+		lock_guard<mutex> l(stats_lock);
+		stats->statistics = BaseStatistics::CreateEmpty(type);
+	}
+}
+
 idx_t ColumnData::GetMaxEntry() {
 	return count;
 }

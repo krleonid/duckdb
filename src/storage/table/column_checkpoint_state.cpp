@@ -231,10 +231,7 @@ void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
 	// into this column. Without the reset, that would be a self-merge (the column's stats
 	// already reflect all segments). Self-merge is idempotent for min/max but not guaranteed
 	// for all stat types (sketches, distinct counts).
-	if (original_column_mutable.stats) {
-		lock_guard<mutex> l(original_column_mutable.stats_lock);
-		original_column_mutable.stats->statistics = BaseStatistics::CreateEmpty(original_column.type);
-	}
+	original_column_mutable.ResetStatistics();
 
 	auto &block_manager = partial_block_manager.GetBlockManager();
 	auto block_size = block_manager.GetBlockSize();
@@ -247,7 +244,7 @@ void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
 	// offset within the shared block. The lead segment (index 0) owns the block
 	// buffer; follower data is memcpy'd in before ConvertToPersistent is called.
 	struct PackEntry {
-		ColumnSegment &segment;
+		reference<ColumnSegment> segment;
 		uint32_t offset_in_block;
 		uint32_t actual_size;
 	};
@@ -258,26 +255,24 @@ void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
 		if (pack.empty()) {
 			return;
 		}
-		auto &lead = pack[0].segment;
+		auto &lead = pack[0].segment.get();
 		if (lead.SegmentSize() != block_size) {
 			D_ASSERT(lead.SegmentSize() < block_size);
 			lead.Resize(block_size);
 		}
 		auto lead_pin = buffer_manager.Pin(lead.block);
-		// memcpy each follower's compacted data into the lead's buffer
 		for (idx_t i = 1; i < pack.size(); i++) {
-			auto &entry = pack[i];
-			auto src_pin = buffer_manager.Pin(entry.segment.block);
-			memcpy(lead_pin.GetDataMutable() + entry.offset_in_block, src_pin.Ptr(), entry.actual_size);
+			auto &follower = pack[i].segment.get();
+			auto src_pin = buffer_manager.Pin(follower.block);
+			memcpy(lead_pin.GetDataMutable() + pack[i].offset_in_block, src_pin.Ptr(), pack[i].actual_size);
 		}
-		// Zero bytes past the last packed segment to avoid persisting uninitialized memory.
 		if (pack_used < block_size) {
 			memset(lead_pin.GetDataMutable() + pack_used, 0, block_size - pack_used);
 		}
 		auto block_id = block_manager.GetFreeBlockId();
 		lead.ConvertToPersistent(context, &block_manager, block_id);
 		for (idx_t i = 1; i < pack.size(); i++) {
-			pack[i].segment.MarkAsPersistent(lead.block, pack[i].offset_in_block);
+			pack[i].segment.get().MarkAsPersistent(lead.block, pack[i].offset_in_block);
 			block_manager.IncreaseBlockReferenceCount(block_id);
 		}
 		pack.clear();
@@ -303,21 +298,18 @@ void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
 			continue;
 		}
 
-		// 3.3: call finalize_append to get actual used bytes (also compacts string dicts)
 		auto &func = segment.GetCompressionFunction();
 		idx_t actual_size =
 		    func.finalize_append ? func.finalize_append(segment, segment.GetStatsMutable()) : segment.SegmentSize();
 		D_ASSERT(actual_size <= block_size);
 
 		if (actual_size >= block_size) {
-			// Full block: no packing benefit, write directly
 			flush_pack();
 			auto block_id = block_manager.GetFreeBlockId();
 			segment.ConvertToPersistent(context, &block_manager, block_id);
 			continue;
 		}
 
-		// 3.2: accumulate small segments; flush when the current block is full
 		if (pack_used + actual_size > block_size) {
 			flush_pack();
 		}

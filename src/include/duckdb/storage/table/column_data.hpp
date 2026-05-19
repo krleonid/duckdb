@@ -132,6 +132,8 @@ public:
 	//! Returns true when the only changes are transient segments at the tail and no persistent segment has update
 	//! nodes. In that case we can flush the tail in-place without re-scanning the entire column.
 	virtual bool HasOnlyTransientTail() const;
+	//! Reset column statistics to empty (used by incremental flush before WritePersistentSegments rebuilds them).
+	void ResetStatistics();
 	//! Whether or not we can scan an entire vector
 	virtual ScanVectorType GetVectorScanType(ColumnScanState &state, idx_t scan_count, Vector &result);
 

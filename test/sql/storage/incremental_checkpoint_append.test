@@ -2,8 +2,6 @@
 # description: Verify correctness after incremental checkpoint: appending to a persistent table
 # group: [storage]
 
-#              only flushes the new tail segments, not the full column data.
-
 load {TEST_DIR}/incremental_checkpoint_append.db
 
 statement ok
