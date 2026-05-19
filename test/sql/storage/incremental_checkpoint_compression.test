@@ -37,22 +37,23 @@ CHECKPOINT;
 statement ok
 SET force_compression = 'rle';
 
-# Append-only: new rows land in the existing row group's transient tail.
-# The incremental path is taken — force_compression is NOT honored.
+# Append-only (no index): SUGGEST_NEW routes new rows to a fresh row group.
+# WriteToDisk is called for the new row group and force_compression = 'rle' IS honored.
 statement ok
 INSERT INTO t SELECT 1000 + i, (i % 10) FROM range(50) tbl(i);
 
 statement ok
 CHECKPOINT;
 
-# The tail segment uses Uncompressed (incremental path does not re-compress).
+# The newly written row-group's INTEGER segments use RLE (WriteToDisk honored
+# force_compression).
 query I
 SELECT compression FROM pragma_storage_info('t')
 WHERE segment_type = 'INTEGER' AND persistent = true
 ORDER BY row_group_id DESC, segment_id DESC
 LIMIT 1;
 ----
-Uncompressed
+RLE
 
 # Reset.
 statement ok
