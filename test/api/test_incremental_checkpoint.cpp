@@ -350,29 +350,31 @@ TEST_CASE("Multiple sequential incremental checkpoints do not cause unbounded fi
 	REQUIRE(block_size > 0);
 	REQUIRE(baseline_size > 0);
 
-	// Run 20 rounds of: reopen → append 50 rows → CHECKPOINT.
-	// Each round is a pure append-only workload so the incremental fast path fires.
+	// Run 20 rounds of: append 50 rows → CHECKPOINT (single connection to avoid
+	// Windows file locking issues with rapid reopen).
 	// Total appended rows = 1000, which is 10% of the baseline.  File growth should
 	// be proportional to the appended data, not to the number of checkpoint rounds.
 	static constexpr int kRounds = 20;
 	static constexpr int kRowsPerRound = 50;
 
-	for (int round = 0; round < kRounds; round++) {
+	{
 		DuckDB db(db_path);
 		Connection con(db);
 		REQUIRE_NO_FAIL(con.Query("SET wal_autocheckpoint = '1TB'"));
 		REQUIRE_NO_FAIL(con.Query("PRAGMA disable_checkpoint_on_shutdown"));
-		{
-			Appender appender(con, "t");
-			int32_t base = 10000 + round * kRowsPerRound;
-			for (int32_t i = base; i < base + kRowsPerRound; i++) {
-				appender.BeginRow();
-				appender.Append<int32_t>(i);
-				appender.Append<const char *>(("tail_" + std::to_string(i)).c_str());
-				appender.EndRow();
+		for (int round = 0; round < kRounds; round++) {
+			{
+				Appender appender(con, "t");
+				int32_t base = 10000 + round * kRowsPerRound;
+				for (int32_t i = base; i < base + kRowsPerRound; i++) {
+					appender.BeginRow();
+					appender.Append<int32_t>(i);
+					appender.Append<const char *>(("tail_" + std::to_string(i)).c_str());
+					appender.EndRow();
+				}
 			}
+			REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
 		}
-		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
 	}
 
 	// Verify final state on restart.
