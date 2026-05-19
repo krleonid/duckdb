@@ -282,10 +282,9 @@ void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
 		pack_used = 0;
 	};
 
-	// No data.Lock() is needed here: this path is only taken during FULL_CHECKPOINT,
-	// which guarantees exclusive access — no concurrent writers can modify the segment list.
+	auto l = original_column_mutable.data.Lock();
 	bool seen_transient = false;
-	for (auto &segment_node : original_column_mutable.data.SegmentNodes()) {
+	for (auto &segment_node : original_column_mutable.data.SegmentNodes(l)) {
 		auto &segment = segment_node.GetNode();
 		if (segment.segment_type != ColumnSegmentType::TRANSIENT) {
 			D_ASSERT(!seen_transient);

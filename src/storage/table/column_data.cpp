@@ -116,9 +116,10 @@ bool ColumnData::HasOnlyTransientTail() const {
 	if (HasUpdates()) {
 		return false;
 	}
+	auto l = data.Lock();
 	bool has_persistent = false;
 	idx_t segment_count = 0;
-	for (auto &segment_node : data.SegmentNodes()) {
+	for (auto &segment_node : data.SegmentNodes(l)) {
 		auto &segment = segment_node.GetNode();
 		if (segment.segment_type == ColumnSegmentType::PERSISTENT) {
 			has_persistent = true;
@@ -128,9 +129,6 @@ bool ColumnData::HasOnlyTransientTail() const {
 	if (!has_persistent) {
 		return false;
 	}
-	// After many incremental flushes the column accumulates many small uncompressed
-	// persistent segments.  Force a full WriteToDisk for compaction once the segment
-	// count grows too large (each round adds ~1-2 segments per column).
 	static constexpr idx_t MAX_SEGMENTS_BEFORE_COMPACTION = 12;
 	if (segment_count > MAX_SEGMENTS_BEFORE_COMPACTION) {
 		return false;
