@@ -146,8 +146,7 @@ struct FixedSizeScanState : public SegmentScanState {
 unique_ptr<SegmentScanState> FixedSizeInitScan(const QueryContext &context, ColumnSegment &segment) {
 	auto result = make_uniq<FixedSizeScanState>();
 	auto &buffer_manager = BufferManager::GetBufferManager(segment.db);
-	auto block_handle = segment.GetBlockForRead();
-	result->handle = buffer_manager.Pin(context, block_handle);
+	result->handle = buffer_manager.Pin(context, segment.block);
 	return std::move(result);
 }
 
@@ -187,8 +186,7 @@ template <class T>
 void FixedSizeFetchRow(ColumnSegment &segment, ColumnFetchState &state, row_t row_id, Vector &result,
                        idx_t result_idx) {
 	auto &buffer_manager = BufferManager::GetBufferManager(segment.db);
-	auto block_handle = segment.GetBlockForRead();
-	auto handle = buffer_manager.Pin(block_handle);
+	auto handle = buffer_manager.Pin(segment.block);
 
 	// first fetch the data from the base table
 	auto data_ptr = handle.GetDataMutable() + segment.GetBlockOffset() + NumericCast<idx_t>(row_id) * sizeof(T);
