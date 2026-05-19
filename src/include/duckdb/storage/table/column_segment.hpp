@@ -12,6 +12,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/function/compression_function.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/storage/buffer/block_handle.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/statistics/segment_statistics.hpp"
@@ -147,8 +148,16 @@ public:
 	idx_t type_size;
 	//! The column segment type (transient or persistent)
 	ColumnSegmentType segment_type;
-	//! The block that this segment relates to
+	//! The block that this segment relates to (protected by block_lock for concurrent access)
 	shared_ptr<BlockHandle> block;
+	//! Lock protecting concurrent read/write of the block shared_ptr
+	mutable mutex block_lock;
+
+	//! Get a safe copy of the block handle (for concurrent access during scans)
+	shared_ptr<BlockHandle> GetBlockForRead() const {
+		lock_guard<mutex> guard(block_lock);
+		return block;
+	}
 
 private:
 	//! The compression function

@@ -180,7 +180,10 @@ void ColumnSegment::Resize(idx_t new_size) {
 	memcpy(new_handle.GetDataMutable(), old_handle.Ptr(), segment_size);
 
 	this->block_id = new_block->BlockId();
-	this->block = std::move(new_block);
+	{
+		lock_guard<mutex> guard(block_lock);
+		this->block = std::move(new_block);
+	}
 	this->segment_size = new_size;
 }
 
@@ -233,6 +236,7 @@ void ColumnSegment::ConvertToPersistent(QueryContext context, optional_ptr<Block
 		// Non-constant block: write the block to disk.
 		// The block data already exists in memory, so we alter the metadata,
 		// which ensures that the buffer points to an on-disk block.
+		lock_guard<mutex> guard(block_lock);
 		block = block_manager->ConvertToPersistent(context, block_id, std::move(block));
 		return;
 	}
@@ -243,6 +247,7 @@ void ColumnSegment::ConvertToPersistent(QueryContext context, optional_ptr<Block
 	D_ASSERT(stats.statistics.IsConstant());
 	auto &config = DBConfig::GetConfig(db);
 	function = config.GetCompressionFunction(CompressionType::COMPRESSION_CONSTANT, type.InternalType());
+	lock_guard<mutex> guard(block_lock);
 	block.reset();
 }
 
@@ -255,6 +260,7 @@ void ColumnSegment::MarkAsPersistent(shared_ptr<BlockHandle> block_p, uint32_t o
 void ColumnSegment::SetBlock(shared_ptr<BlockHandle> block_p, uint32_t offset_p) {
 	segment_type = ColumnSegmentType::PERSISTENT;
 	offset = offset_p;
+	lock_guard<mutex> guard(block_lock);
 	block = std::move(block_p);
 }
 
