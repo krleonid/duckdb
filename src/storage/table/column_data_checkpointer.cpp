@@ -462,14 +462,21 @@ void ColumnDataCheckpointer::Checkpoint() {
 		return;
 	}
 
-	// Incremental-flush optimisation: when the only changes are new transient tail segments
-	// (Appender inserts), no column has a pending UpdateSegment, the row group has no
-	// pending deletes, and the checkpoint is a FULL_CHECKPOINT (no concurrent readers that
-	// may be pinning the old block handles), we avoid re-scanning and re-compressing all
-	// existing data.
+	// Incremental-flush optimisation: when the only column-level changes are new transient
+	// tail segments (Appender inserts) and no column has a pending UpdateSegment, we avoid
+	// re-scanning and re-compressing all existing persistent data.
+	// Row-level deletes are safe to ignore here: they are serialized independently via
+	// CheckpointDeletes() at the RowGroup level and do not affect physical column data.
 	// CONCURRENT_CHECKPOINT must use WriteToDisk() because ConvertToPersistent() mutates
 	// segment state (type, block handle) in place, which races with active scanners.
-	if (checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT && HasOnlyTransientTail()) {
+	// Skip if force_compression is set — the incremental path writes Uncompressed and
+	// would violate the user's explicit compression request.
+	auto &db = storage_manager.GetDatabase();
+	auto &config = DBConfig::GetConfig(db);
+	auto force_compression = Settings::Get<ForceCompressionSetting>(config);
+	if (force_compression == CompressionType::COMPRESSION_AUTO &&
+	    checkpoint_info.GetCompressionType() == CompressionType::COMPRESSION_AUTO &&
+	    checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT && HasOnlyTransientTail()) {
 		FlushTransientTail();
 		return;
 	}
