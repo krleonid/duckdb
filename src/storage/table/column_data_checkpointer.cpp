@@ -481,8 +481,7 @@ void ColumnDataCheckpointer::Checkpoint() {
 				break;
 			}
 		}
-		if (!block_manager.InMemory() && !has_varchar &&
-		    force_compression == CompressionType::COMPRESSION_AUTO &&
+		if (!block_manager.InMemory() && !has_varchar && force_compression == CompressionType::COMPRESSION_AUTO &&
 		    checkpoint_info.GetCompressionType() == CompressionType::COMPRESSION_AUTO &&
 		    checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT) {
 			FlushTransientTail();
