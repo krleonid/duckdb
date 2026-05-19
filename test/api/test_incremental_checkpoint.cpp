@@ -254,11 +254,10 @@ TEST_CASE("Incremental checkpoint is faster than full rewrite on append-only wor
 	DeleteDatabase(db_path);
 }
 
-TEST_CASE("Concurrent reader causes incremental checkpoint to fall back to WriteToDisk", "[api][.]") {
+TEST_CASE("Checkpoint with concurrent reader does not crash and preserves data", "[api][.]") {
 	auto db_path = TestDirectoryPath() + "/incremental_checkpoint_concurrent.db";
 	DeleteDatabase(db_path);
 
-	// Build a persistent baseline so there are on-disk segments.
 	{
 		DuckDB db(db_path);
 		Connection con(db);
@@ -277,9 +276,6 @@ TEST_CASE("Concurrent reader causes incremental checkpoint to fall back to Write
 		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
 	}
 
-	// Reopen: append a tail, then run CHECKPOINT while a reader holds an open transaction.
-	// The open read transaction triggers CONCURRENT_CHECKPOINT → WriteToDisk (not in-place
-	// ConvertToPersistent), which is the safe path for concurrent access.
 	{
 		DuckDB db(db_path);
 		Connection writer(db);
@@ -298,28 +294,25 @@ TEST_CASE("Concurrent reader causes incremental checkpoint to fall back to Write
 			}
 		}
 
-		// Open a read transaction on the reader — this should cause CONCURRENT_CHECKPOINT.
+		// Open a read transaction — triggers CONCURRENT_CHECKPOINT path.
 		REQUIRE_NO_FAIL(reader.Query("BEGIN TRANSACTION"));
 		auto read_result = reader.Query("SELECT COUNT(*) FROM t");
-		// The reader sees 1050 rows (all committed rows visible to its snapshot).
 		REQUIRE(CHECK_COLUMN(read_result, 0, {1050}));
 
-		// CHECKPOINT while the reader transaction is still open.  Must not crash and must
-		// use WriteToDisk (not in-place ConvertToPersistent) due to the active reader.
+		// CHECKPOINT while reader transaction is open. Must not crash.
 		REQUIRE_NO_FAIL(writer.Query("CHECKPOINT"));
 
-		// Reader still sees its snapshot correctly.
+		// Reader snapshot is stable.
 		auto read_result2 = reader.Query("SELECT COUNT(*) FROM t");
 		REQUIRE(CHECK_COLUMN(read_result2, 0, {1050}));
 
 		REQUIRE_NO_FAIL(reader.Query("COMMIT"));
 
-		// Writer sees all rows.
 		auto write_result = writer.Query("SELECT COUNT(*) FROM t");
 		REQUIRE(CHECK_COLUMN(write_result, 0, {1050}));
 	}
 
-	// Verify on restart that tail rows survived the concurrent checkpoint.
+	// Data survives restart.
 	{
 		DuckDB db(db_path);
 		Connection con(db);
