@@ -275,8 +275,8 @@ TEST_CASE("FlushTransientTail does not crash with mixed column types", "[api]") 
 		REQUIRE_NO_FAIL(con.Query("SET wal_autocheckpoint = '1TB'"));
 		REQUIRE_NO_FAIL(con.Query("PRAGMA disable_checkpoint_on_shutdown"));
 
-		REQUIRE_NO_FAIL(con.Query(
-		    "CREATE TABLE t (id INTEGER, score DOUBLE, label VARCHAR, meta STRUCT(a INTEGER, b VARCHAR))"));
+		REQUIRE_NO_FAIL(
+		    con.Query("CREATE TABLE t (id INTEGER, score DOUBLE, label VARCHAR, meta STRUCT(a INTEGER, b VARCHAR))"));
 		REQUIRE_NO_FAIL(con.Query("CREATE INDEX idx_id ON t(id)"));
 
 		{
@@ -286,7 +286,8 @@ TEST_CASE("FlushTransientTail does not crash with mixed column types", "[api]") 
 				appender.Append<int32_t>(row);
 				appender.Append<double>(row * 1.5);
 				appender.Append<const char *>(("label_" + std::to_string(row)).c_str());
-				appender.Append<Value>(Value::STRUCT({{"a", Value::INTEGER(row)}, {"b", Value("s_" + std::to_string(row))}}));
+				appender.Append<Value>(
+				    Value::STRUCT({{"a", Value::INTEGER(row)}, {"b", Value("s_" + std::to_string(row))}}));
 				appender.EndRow();
 			}
 		}
@@ -300,8 +301,7 @@ TEST_CASE("FlushTransientTail does not crash with mixed column types", "[api]") 
 		REQUIRE_NO_FAIL(con.Query("SET wal_autocheckpoint = '1TB'"));
 		REQUIRE_NO_FAIL(con.Query("PRAGMA disable_checkpoint_on_shutdown"));
 
-		REQUIRE_NO_FAIL(con.Query(
-		    "INSERT INTO t VALUES (99999, 99.9, 'tail', {'a': 42, 'b': 'hello'})"));
+		REQUIRE_NO_FAIL(con.Query("INSERT INTO t VALUES (99999, 99.9, 'tail', {'a': 42, 'b': 'hello'})"));
 		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
 	}
 
