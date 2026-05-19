@@ -371,6 +371,9 @@ void ColumnDataCheckpointer::WritePersistentSegments(ColumnCheckpointState &stat
 	idx_t current_row = 0;
 	for (auto &segment_node : col_data.data.SegmentNodes()) {
 		auto &segment = segment_node.GetNode();
+		if (segment.count.load() == 0) {
+			continue;
+		}
 		auto segment_start = segment_node.GetRowStart();
 		if (segment_start != current_row) {
 			error_segment_start = segment_start;
@@ -466,8 +469,7 @@ void ColumnDataCheckpointer::Checkpoint() {
 	// existing data.
 	// CONCURRENT_CHECKPOINT must use WriteToDisk() because ConvertToPersistent() mutates
 	// segment state (type, block handle) in place, which races with active scanners.
-	if (!row_group.HasPendingDeletes() && checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT &&
-	    HasOnlyTransientTail()) {
+	if (checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT && HasOnlyTransientTail()) {
 		FlushTransientTail();
 		return;
 	}
