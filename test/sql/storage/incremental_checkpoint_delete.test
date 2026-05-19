@@ -1,10 +1,11 @@
 # name: test/sql/storage/incremental_checkpoint_delete.test
 # description: Regression tests for incremental checkpoint + DELETE interactions.
+# group: [storage]
+
 #   When a row group has deletions, HasChanges() returns true and the checkpointer
 #   must use WriteToDisk (not the transient-tail fast path).  Verify that deletions
 #   are preserved after restart and that subsequent inserts into the same table are
 #   also correctly checkpointed.
-# group: [storage]
 
 load {TEST_DIR}/inc_ckpt_delete.db
 

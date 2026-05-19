@@ -1,9 +1,10 @@
 # name: test/sql/storage/incremental_checkpoint_types.test
 # description: Regression tests for incremental checkpoint with nested and wide types.
+# group: [storage]
+
 #   LIST, STRUCT, ARRAY columns, NULLs in nested types, and wide VARCHAR with unique
 #   strings (exercises dictionary footprint) must all round-trip correctly through the
 #   incremental fast path.
-# group: [storage]
 
 load {TEST_DIR}/inc_ckpt_types.db
 

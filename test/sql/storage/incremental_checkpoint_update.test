@@ -1,10 +1,11 @@
 # name: test/sql/storage/incremental_checkpoint_update.test
 # description: Regression tests for incremental checkpoint + UPDATE interactions.
+# group: [storage]
+
 #   §2.1 – UPDATE on a newly-inserted (TRANSIENT) row must not be lost: the checkpointer
 #           must detect the update node and fall back to WriteToDisk.
 #   §2.3 – UPDATE that sets a column to NULL must also persist: the validity child column
 #           receives its own update node which HasOnlyTransientTail() must detect.
-# group: [storage]
 
 load {TEST_DIR}/inc_ckpt_update.db
 

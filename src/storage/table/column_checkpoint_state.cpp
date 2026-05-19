@@ -296,7 +296,7 @@ void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
 		if (segment.count.load() == 0) {
 			continue;
 		}
-		if (segment.stats.statistics.IsConstant()) {
+		if (segment.GetStats().IsConstant()) {
 			flush_pack();
 			segment.ConvertToPersistent(context, nullptr, INVALID_BLOCK);
 			continue;
@@ -304,7 +304,8 @@ void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
 
 		// 3.3: call finalize_append to get actual used bytes (also compacts string dicts)
 		auto &func = segment.GetCompressionFunction();
-		idx_t actual_size = func.finalize_append ? func.finalize_append(segment, segment.stats) : segment.SegmentSize();
+		idx_t actual_size =
+		    func.finalize_append ? func.finalize_append(segment, segment.GetStatsMutable()) : segment.SegmentSize();
 		D_ASSERT(actual_size <= block_size);
 
 		if (actual_size >= block_size) {

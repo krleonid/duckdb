@@ -1,11 +1,12 @@
 # name: test/sql/storage/incremental_checkpoint_compression.test
 # description: Regression tests for incremental checkpoint + compression settings.
+# group: [storage]
+
 #   The incremental fast path (FlushTransientSegmentsInPlace) always writes
 #   Uncompressed segments — it does NOT re-compress with SET force_compression.
 #   This is a documented limitation: force_compression only takes effect when
 #   WriteToDisk is used (i.e., when there are updates/deletes in the row group).
 #   Tests here pin that behavior so a silent regression shows up as a test failure.
-# group: [storage]
 
 load {TEST_DIR}/inc_ckpt_compress.db
 
