@@ -118,22 +118,14 @@ bool ColumnData::HasOnlyTransientTail() const {
 	}
 	auto l = data.Lock();
 	bool has_persistent = false;
-	idx_t segment_count = 0;
 	for (auto &segment_node : data.SegmentNodes(l)) {
 		auto &segment = segment_node.GetNode();
 		if (segment.segment_type == ColumnSegmentType::PERSISTENT) {
 			has_persistent = true;
+			break;
 		}
-		segment_count++;
 	}
-	if (!has_persistent) {
-		return false;
-	}
-	static constexpr idx_t MAX_SEGMENTS_BEFORE_COMPACTION = 12;
-	if (segment_count > MAX_SEGMENTS_BEFORE_COMPACTION) {
-		return false;
-	}
-	return true;
+	return has_persistent;
 }
 
 void ColumnData::ResetStatistics() {
