@@ -260,14 +260,16 @@ void ColumnCheckpointState::FlushTransientSegmentsInPlace() {
 			D_ASSERT(lead.SegmentSize() < block_size);
 			lead.Resize(block_size);
 		}
-		auto lead_pin = buffer_manager.Pin(lead.block);
-		for (idx_t i = 1; i < pack.size(); i++) {
-			auto &follower = pack[i].segment.get();
-			auto src_pin = buffer_manager.Pin(follower.block);
-			memcpy(lead_pin.GetDataMutable() + pack[i].offset_in_block, src_pin.Ptr(), pack[i].actual_size);
-		}
-		if (pack_used < block_size) {
-			memset(lead_pin.GetDataMutable() + pack_used, 0, block_size - pack_used);
+		{
+			auto lead_pin = buffer_manager.Pin(lead.block);
+			for (idx_t i = 1; i < pack.size(); i++) {
+				auto &follower = pack[i].segment.get();
+				auto src_pin = buffer_manager.Pin(follower.block);
+				memcpy(lead_pin.GetDataMutable() + pack[i].offset_in_block, src_pin.Ptr(), pack[i].actual_size);
+			}
+			if (pack_used < block_size) {
+				memset(lead_pin.GetDataMutable() + pack_used, 0, block_size - pack_used);
+			}
 		}
 		auto block_id = block_manager.GetFreeBlockId();
 		lead.ConvertToPersistent(context, &block_manager, block_id);
