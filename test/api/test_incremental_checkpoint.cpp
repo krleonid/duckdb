@@ -261,6 +261,64 @@ TEST_CASE("Checkpoint with concurrent reader does not crash and preserves data",
 	DeleteDatabase(db_path);
 }
 
+TEST_CASE("FlushTransientTail does not crash with mixed column types", "[api]") {
+	// Regression: when primitive columns take FlushTransientTail and complex-type columns
+	// (STRUCT/VARCHAR) in the SAME row group take WriteToDisk, the PartialBlockManager can
+	// try to flush segments that were already converted in-place → NULL block crash.
+	// This test mixes INTEGER + STRUCT columns on an indexed table.
+	auto db_path = TestDirectoryPath() + "/incremental_mixed_types_crash.db";
+	DeleteDatabase(db_path);
+
+	{
+		DuckDB db(db_path);
+		Connection con(db);
+		REQUIRE_NO_FAIL(con.Query("SET wal_autocheckpoint = '1TB'"));
+		REQUIRE_NO_FAIL(con.Query("PRAGMA disable_checkpoint_on_shutdown"));
+
+		REQUIRE_NO_FAIL(con.Query(
+		    "CREATE TABLE t (id INTEGER, score DOUBLE, label VARCHAR, meta STRUCT(a INTEGER, b VARCHAR))"));
+		REQUIRE_NO_FAIL(con.Query("CREATE INDEX idx_id ON t(id)"));
+
+		{
+			Appender appender(con, "t");
+			for (int32_t row = 0; row < 1000; row++) {
+				appender.BeginRow();
+				appender.Append<int32_t>(row);
+				appender.Append<double>(row * 1.5);
+				appender.Append<const char *>(("label_" + std::to_string(row)).c_str());
+				appender.Append<Value>(Value::STRUCT({{"a", Value::INTEGER(row)}, {"b", Value("s_" + std::to_string(row))}}));
+				appender.EndRow();
+			}
+		}
+		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	}
+
+	// Reopen, append 1 row (goes to existing row group due to index), checkpoint.
+	{
+		DuckDB db(db_path);
+		Connection con(db);
+		REQUIRE_NO_FAIL(con.Query("SET wal_autocheckpoint = '1TB'"));
+		REQUIRE_NO_FAIL(con.Query("PRAGMA disable_checkpoint_on_shutdown"));
+
+		REQUIRE_NO_FAIL(con.Query(
+		    "INSERT INTO t VALUES (99999, 99.9, 'tail', {'a': 42, 'b': 'hello'})"));
+		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	}
+
+	// Verify data survives restart
+	{
+		DuckDB db(db_path);
+		Connection con(db);
+		auto res = con.Query("SELECT COUNT(*) FROM t");
+		REQUIRE(CHECK_COLUMN(res, 0, {1001}));
+		auto tail = con.Query("SELECT score, label FROM t WHERE id = 99999");
+		REQUIRE(CHECK_COLUMN(tail, 0, {99.9}));
+		REQUIRE(CHECK_COLUMN(tail, 1, {"tail"}));
+	}
+
+	DeleteDatabase(db_path);
+}
+
 TEST_CASE("Multiple sequential incremental checkpoints do not cause unbounded file growth", "[api]") {
 	auto db_path = TestDirectoryPath() + "/incremental_checkpoint_growth.db";
 	DeleteDatabase(db_path);
