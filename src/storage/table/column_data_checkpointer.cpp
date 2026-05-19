@@ -440,19 +440,23 @@ void ColumnDataCheckpointer::FlushTransientTail() {
 }
 
 void ColumnDataCheckpointer::Checkpoint() {
+	// Single pass: detect has_changes and whether all changed columns qualify for incremental flush.
+	bool tail_only = true;
 	for (idx_t i = 0; i < checkpoint_states.size(); i++) {
 		auto &state = checkpoint_states[i];
 		auto &col_data = state.get().original_column;
 		if (col_data.HasChanges()) {
 			has_changes = true;
-			break;
+			if (tail_only && !col_data.HasOnlyTransientTail()) {
+				tail_only = false;
+			}
 		}
+	}
+	if (!has_changes) {
+		tail_only = false;
 	}
 
 	if (!has_changes) {
-		// Nothing has undergone any changes, no need to checkpoint
-		// just move on to finalizing
-		// mark block ids as checkpointed
 		CheckpointBlockIdMarker marker(storage_manager.GetBlockManager());
 		for (idx_t i = 0; i < checkpoint_states.size(); i++) {
 			auto &state = checkpoint_states[i];
@@ -462,39 +466,28 @@ void ColumnDataCheckpointer::Checkpoint() {
 		return;
 	}
 
-	// Incremental-flush optimisation: when the only column-level changes are new transient
-	// tail segments (Appender inserts) and no column has a pending UpdateSegment, we avoid
-	// re-scanning and re-compressing all existing persistent data.
-	// Row-level deletes are safe to ignore here: they are serialized independently via
-	// CheckpointDeletes() at the RowGroup level and do not affect physical column data.
-	// CONCURRENT_CHECKPOINT must use WriteToDisk() because ConvertToPersistent() mutates
-	// segment state (type, block handle) in place, which races with active scanners.
-	// Skip if force_compression is set — the incremental path writes Uncompressed and
-	// would violate the user's explicit compression request.
-	// Skip for in-memory databases (no block manager I/O support).
-	// Skip for VARCHAR columns — overflow strings in separate blocks are not handled by
-	// the incremental path and would be lost on restart.
-	auto &block_manager = storage_manager.GetBlockManager();
-	if (block_manager.InMemory()) {
-		WriteToDisk();
-		return;
-	}
-	bool has_varchar = false;
-	for (idx_t i = 0; i < checkpoint_states.size(); i++) {
-		auto &col_data = checkpoint_states[i].get().original_column;
-		if (col_data.type.InternalType() == PhysicalType::VARCHAR) {
-			has_varchar = true;
-			break;
+	// Incremental-flush: skip re-scanning persistent data when only a transient tail exists.
+	// Bail to WriteToDisk for: in-memory DBs, VARCHAR columns (overflow strings),
+	// forced compression, concurrent checkpoints, or columns that don't qualify.
+	if (tail_only) {
+		auto &block_manager = storage_manager.GetBlockManager();
+		auto &db = storage_manager.GetDatabase();
+		auto &config = DBConfig::GetConfig(db);
+		auto force_compression = Settings::Get<ForceCompressionSetting>(config);
+		bool has_varchar = false;
+		for (idx_t i = 0; i < checkpoint_states.size(); i++) {
+			if (checkpoint_states[i].get().original_column.type.InternalType() == PhysicalType::VARCHAR) {
+				has_varchar = true;
+				break;
+			}
 		}
-	}
-	auto &db = storage_manager.GetDatabase();
-	auto &config = DBConfig::GetConfig(db);
-	auto force_compression = Settings::Get<ForceCompressionSetting>(config);
-	if (!has_varchar && force_compression == CompressionType::COMPRESSION_AUTO &&
-	    checkpoint_info.GetCompressionType() == CompressionType::COMPRESSION_AUTO &&
-	    checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT && HasOnlyTransientTail()) {
-		FlushTransientTail();
-		return;
+		if (!block_manager.InMemory() && !has_varchar &&
+		    force_compression == CompressionType::COMPRESSION_AUTO &&
+		    checkpoint_info.GetCompressionType() == CompressionType::COMPRESSION_AUTO &&
+		    checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT) {
+			FlushTransientTail();
+			return;
+		}
 	}
 
 	WriteToDisk();
