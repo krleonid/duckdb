@@ -471,10 +471,26 @@ void ColumnDataCheckpointer::Checkpoint() {
 	// segment state (type, block handle) in place, which races with active scanners.
 	// Skip if force_compression is set — the incremental path writes Uncompressed and
 	// would violate the user's explicit compression request.
+	// Skip for in-memory databases (no block manager I/O support).
+	// Skip for VARCHAR columns — overflow strings in separate blocks are not handled by
+	// the incremental path and would be lost on restart.
+	auto &block_manager = storage_manager.GetBlockManager();
+	if (block_manager.InMemory()) {
+		WriteToDisk();
+		return;
+	}
+	bool has_varchar = false;
+	for (idx_t i = 0; i < checkpoint_states.size(); i++) {
+		auto &col_data = checkpoint_states[i].get().original_column;
+		if (col_data.type.InternalType() == PhysicalType::VARCHAR) {
+			has_varchar = true;
+			break;
+		}
+	}
 	auto &db = storage_manager.GetDatabase();
 	auto &config = DBConfig::GetConfig(db);
 	auto force_compression = Settings::Get<ForceCompressionSetting>(config);
-	if (force_compression == CompressionType::COMPRESSION_AUTO &&
+	if (!has_varchar && force_compression == CompressionType::COMPRESSION_AUTO &&
 	    checkpoint_info.GetCompressionType() == CompressionType::COMPRESSION_AUTO &&
 	    checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT && HasOnlyTransientTail()) {
 		FlushTransientTail();
