@@ -474,14 +474,16 @@ void ColumnDataCheckpointer::Checkpoint() {
 		auto &db = storage_manager.GetDatabase();
 		auto &config = DBConfig::GetConfig(db);
 		auto force_compression = Settings::Get<ForceCompressionSetting>(config);
-		bool has_varchar = false;
+		bool has_complex_type = false;
 		for (idx_t i = 0; i < checkpoint_states.size(); i++) {
-			if (checkpoint_states[i].get().original_column.type.InternalType() == PhysicalType::VARCHAR) {
-				has_varchar = true;
+			auto internal_type = checkpoint_states[i].get().original_column.type.InternalType();
+			if (internal_type == PhysicalType::VARCHAR || internal_type == PhysicalType::LIST ||
+			    internal_type == PhysicalType::STRUCT || internal_type == PhysicalType::ARRAY) {
+				has_complex_type = true;
 				break;
 			}
 		}
-		if (!block_manager.InMemory() && !has_varchar && force_compression == CompressionType::COMPRESSION_AUTO &&
+		if (!block_manager.InMemory() && !has_complex_type && force_compression == CompressionType::COMPRESSION_AUTO &&
 		    checkpoint_info.GetCompressionType() == CompressionType::COMPRESSION_AUTO &&
 		    checkpoint_info.GetCheckpointType() == CheckpointType::FULL_CHECKPOINT) {
 			FlushTransientTail();
