@@ -104,10 +104,13 @@ shared_ptr<BlockHandle> BlockManager::ConvertToPersistent(QueryContext context, 
 	old_handle.Destroy();
 	old_block.reset();
 
-	// potentially purge the queue
-	auto purge_queue = buffer_manager.GetBufferPool().AddToEvictionQueue(new_block);
-	if (purge_queue) {
-		buffer_manager.GetBufferPool().PurgeQueue(*new_block);
+	if (defer_eviction) {
+		deferred_pins.push_back(buffer_manager.Pin(new_block));
+	} else {
+		auto purge_queue = buffer_manager.GetBufferPool().AddToEvictionQueue(new_block);
+		if (purge_queue) {
+			buffer_manager.GetBufferPool().PurgeQueue(*new_block);
+		}
 	}
 	return new_block;
 }
@@ -146,6 +149,19 @@ void BlockManager::Write(QueryContext context, FileBuffer &block, block_id_t blo
 }
 
 void BlockManager::Truncate() {
+}
+
+void BlockManager::BeginDeferEviction() {
+	defer_eviction = true;
+}
+
+void BlockManager::EndDeferEviction() {
+	defer_eviction = false;
+	// Release all pins — blocks become eligible for eviction
+	for (auto &pin : deferred_pins) {
+		pin.Destroy();
+	}
+	deferred_pins.clear();
 }
 
 } // namespace duckdb

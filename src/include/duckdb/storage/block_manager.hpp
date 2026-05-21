@@ -13,6 +13,7 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/storage/block.hpp"
+#include "duckdb/storage/buffer/buffer_handle.hpp"
 #include "duckdb/storage/storage_info.hpp"
 
 namespace duckdb {
@@ -182,6 +183,12 @@ public:
 		return reinterpret_cast<const TARGET &>(*this);
 	}
 
+public:
+	//! Begin deferring eviction queue additions (call before checkpoint writes)
+	void BeginDeferEviction();
+	//! End deferring and release all retained blocks to the eviction queue
+	void EndDeferEviction();
+
 protected:
 	//! A flag to be flipped in the destructor of the subclass, which is called first.
 	//! Relevant for some Windows edge cases.
@@ -192,6 +199,10 @@ private:
 	mutex blocks_lock;
 	//! A mapping of block id -> BlockHandle
 	unordered_map<block_id_t, weak_ptr<BlockHandle>> blocks;
+	//! When true, ConvertToPersistent pins blocks instead of adding to eviction queue
+	bool defer_eviction = false;
+	//! Blocks pinned during deferred eviction (kept alive until EndDeferEviction)
+	vector<BufferHandle> deferred_pins;
 	//! The metadata manager
 	unique_ptr<MetadataManager> metadata_manager;
 	//! The allocation size of blocks managed by this block manager. Defaults to DEFAULT_BLOCK_ALLOC_SIZE
