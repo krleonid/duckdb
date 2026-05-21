@@ -247,6 +247,7 @@ void SingleFileCheckpointWriter::CreateCheckpoint() {
 		dependency_manager.ReorderEntries(catalog_entries);
 
 		// write the actual data into the database
+		block_manager.BeginDeferEviction();
 
 		// Create a serializer to write the checkpoint data
 		// The serialized format is roughly:
@@ -276,6 +277,8 @@ void SingleFileCheckpointWriter::CreateCheckpoint() {
 
 		metadata_writer->Flush();
 		table_metadata_writer->Flush();
+
+		block_manager.EndDeferEviction();
 
 		auto debug_checkpoint_abort = Settings::Get<DebugCheckpointAbortSetting>(db.GetDatabase());
 		if (debug_checkpoint_abort == CheckpointAbort::DEBUG_ABORT_BEFORE_HEADER) {
