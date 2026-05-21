@@ -487,7 +487,7 @@ void ValidityScan(ColumnSegment &segment, ColumnScanState &state, idx_t scan_cou
 // Select
 //===--------------------------------------------------------------------===//
 void ValiditySelect(ColumnSegment &segment, ColumnScanState &state, idx_t, Vector &result, const SelectionVector &sel,
-                    idx_t sel_count) {
+                    idx_t sel_count, idx_t result_offset) {
 	result.Flatten();
 
 	auto &scan_state = state.scan_state->Cast<ValidityScanState>();
@@ -500,7 +500,7 @@ void ValiditySelect(ColumnSegment &segment, ColumnScanState &state, idx_t, Vecto
 	for (idx_t i = 0; i < sel_count; i++) {
 		auto source_idx = start + sel.get_index(i);
 		if (!source_mask.RowIsValidUnsafe(source_idx)) {
-			result_mask.SetInvalid(i);
+			result_mask.SetInvalid(result_offset + i);
 		}
 	}
 }

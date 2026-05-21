@@ -160,7 +160,7 @@ void DictFSSTCompressionStorage::StringFetchRow(ColumnSegment &segment, ColumnFe
 // Select
 //===--------------------------------------------------------------------===//
 void DictFSSTSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector_count, Vector &result,
-                    const SelectionVector &sel, idx_t sel_count) {
+                    const SelectionVector &sel, idx_t sel_count, idx_t result_offset) {
 	auto &scan_state = state.scan_state->Cast<CompressedStringScanState>();
 	if (scan_state.mode == DictFSSTMode::FSST_ONLY) {
 		// for FSST only

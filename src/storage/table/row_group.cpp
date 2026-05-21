@@ -798,8 +798,6 @@ void RowGroup::Scan(ScanOptions options, CollectionScanState &state, DataChunk &
 				const auto &column = column_ids[i];
 				auto &col_data = GetColumn(column);
 				state.column_scans[i].update_scan_type = options.update_type;
-				// pass max_count explicitly so we never read past the row count we captured at scan
-				// init time (concurrent inserts can grow the column past max_count)
 				col_data.Scan(transaction, state.vector_index, state.column_scans[i], result.data[i], max_count);
 			}
 		} else {
@@ -812,7 +810,6 @@ void RowGroup::Scan(ScanOptions options, CollectionScanState &state, DataChunk &
 				sel.Initialize(nullptr);
 			}
 			//! first, we scan the columns with filters, fetch their data and generate a selection vector.
-			//! get runtime statistics
 			auto adaptive_filter = filter_info.GetAdaptiveFilter();
 			auto filter_state = filter_info.BeginFilter();
 			if (has_filters) {
@@ -822,7 +819,6 @@ void RowGroup::Scan(ScanOptions options, CollectionScanState &state, DataChunk &
 					auto filter_idx = permutation[i];
 					auto &filter = filter_list[filter_idx];
 					if (filter.IsAlwaysTrue()) {
-						// this filter is always true - skip it
 						continue;
 					}
 					auto &table_filter_state = *filter.filter_state;
@@ -848,10 +844,8 @@ void RowGroup::Scan(ScanOptions options, CollectionScanState &state, DataChunk &
 				}
 			}
 			if (approved_tuple_count == 0) {
-				// all rows were filtered out by the table filters
 				D_ASSERT(has_filters);
 				result.Reset();
-				// skip this vector in all the scans that were not scanned yet
 				for (idx_t i = 0; i < column_ids.size(); i++) {
 					auto &col_idx = column_ids[i];
 					if (has_filters && filter_info.ColumnHasFilters(i)) {
@@ -866,7 +860,6 @@ void RowGroup::Scan(ScanOptions options, CollectionScanState &state, DataChunk &
 			//! Now we use the selection vector to fetch data for the other columns.
 			for (idx_t i = 0; i < column_ids.size(); i++) {
 				if (has_filters && filter_info.ColumnHasFilters(i)) {
-					// column has already been scanned as part of the filtering process
 					continue;
 				}
 				auto &column = column_ids[i];
