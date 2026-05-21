@@ -102,8 +102,7 @@ void StandardColumnData::Select(TransactionData transaction, idx_t vector_index,
 	auto validity_compression = validity->GetCompressionFunction();
 	bool validity_has_select = validity_compression && validity_compression->select;
 	auto target_count = GetVectorCount(vector_index);
-	if (!has_select || !validity_has_select || HasUpdates()) {
-		// no select support or has updates — use generic fallback
+	if (!has_select || !validity_has_select || HasUpdates() || result.GetVectorType() != VectorType::FLAT_VECTOR) {
 		ColumnData::Select(transaction, vector_index, state, result, sel, sel_count);
 		return;
 	}

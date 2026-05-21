@@ -708,7 +708,7 @@ void FSSTStorage::Select(ColumnSegment &segment, ColumnScanState &state, idx_t v
 
 	for (idx_t i = 0; i < sel_count; i++) {
 		idx_t index = sel.get_index(i);
-		result_data[i] = scan_state.DecompressString(dict, baseptr, offsets, index, str_allocator);
+		result_data[result_offset + i] = scan_state.DecompressString(dict, baseptr, offsets, index, str_allocator);
 	}
 	EndScan(scan_state, offsets, start, vector_count);
 }

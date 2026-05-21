@@ -165,12 +165,25 @@ void DictFSSTSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector
 	if (scan_state.mode == DictFSSTMode::FSST_ONLY) {
 		// for FSST only
 		auto start = state.GetPositionInSegment();
-		scan_state.Select(result, start, sel, sel_count);
+		scan_state.Select(result, result_offset, start, sel, sel_count);
 		return;
 	}
-	// fallback: scan + slice
-	DictFSSTCompressionStorage::StringScan(segment, state, vector_count, result);
-	result.Slice(sel, sel_count);
+	// Dictionary mode: scan into temporary, then copy selected entries at offset
+	Vector temp(result.GetType(), vector_count);
+	DictFSSTCompressionStorage::StringScan(segment, state, vector_count, temp);
+	UnifiedVectorFormat temp_format;
+	temp.ToUnifiedFormat(temp_format);
+	auto temp_data = UnifiedVectorFormat::GetData<string_t>(temp_format);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
+	for (idx_t i = 0; i < sel_count; i++) {
+		auto source_idx = temp_format.sel->get_index(sel.get_index(i));
+		if (temp_format.validity.RowIsValid(source_idx)) {
+			result_data[result_offset + i] = StringVector::AddString(result, temp_data[source_idx]);
+		} else {
+			result_validity.SetInvalid(result_offset + i);
+		}
+	}
 }
 
 //===--------------------------------------------------------------------===//

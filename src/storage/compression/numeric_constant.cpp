@@ -278,13 +278,21 @@ void ConstantFetchRow(ColumnSegment &segment, ColumnFetchState &state, row_t row
 //===--------------------------------------------------------------------===//
 void ConstantSelectValidity(ColumnSegment &segment, ColumnScanState &state, idx_t vector_count, Vector &result,
                             const SelectionVector &sel, idx_t sel_count, idx_t result_offset) {
-	ConstantScanFunctionValidity(segment, state, sel_count, result);
+	if (result_offset == 0) {
+		ConstantScanFunctionValidity(segment, state, sel_count, result);
+	} else {
+		ConstantFillFunctionValidity(segment, result, result_offset, sel_count);
+	}
 }
 
 template <class T>
 void ConstantSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector_count, Vector &result,
                     const SelectionVector &sel, idx_t sel_count, idx_t result_offset) {
-	ConstantScanFunction<T>(segment, state, vector_count, result);
+	if (result_offset == 0) {
+		ConstantScanFunction<T>(segment, state, vector_count, result);
+	} else {
+		ConstantFillFunction<T>(segment, result, result_offset, sel_count);
+	}
 }
 
 //===--------------------------------------------------------------------===//
