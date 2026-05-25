@@ -124,7 +124,7 @@ public:
 
 private:
 	//! Bulk purge dead nodes from the eviction queue. Then, re-enqueue those that are still alive.
-	void PurgeIteration(const idx_t purge_size, idx_t &total_alive_found, idx_t &total_dead_found);
+	void PurgeIteration(const idx_t purge_size);
 
 public:
 	//! The type of the buffers in this queue and helper function (both for verification only)
@@ -209,18 +209,15 @@ void EvictionQueue::Purge(const DatabaseInstance &db) {
 	// 2.3. We've purged the entire queue: max_purges is zero. This is a worst-case scenario,
 	// guaranteeing that we always exit the loop.
 
-	auto start_time = std::chrono::steady_clock::now();
+	auto purge_start = std::chrono::steady_clock::now();
 	idx_t initial_q_size = approx_q_size;
 	idx_t initial_dead_nodes = total_dead_nodes.load();
-	idx_t total_alive_found = 0;
-	idx_t total_dead_found = 0;
-	idx_t iterations = 0;
 
 	idx_t max_purges = approx_q_size / purge_size;
+	idx_t initial_max_purges = max_purges;
 
 	while (max_purges != 0) {
-		PurgeIteration(purge_size, total_alive_found, total_dead_found);
-		iterations++;
+		PurgeIteration(purge_size);
 
 		// update relevant sizes and potentially early-out
 		approx_q_size = q.size_approx();
@@ -242,8 +239,11 @@ void EvictionQueue::Purge(const DatabaseInstance &db) {
 		max_purges--;
 	}
 
-	auto end_time = std::chrono::steady_clock::now();
-	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+	idx_t iterations = initial_max_purges - max_purges;
+	idx_t total_dead_found = initial_dead_nodes - total_dead_nodes.load();
+	idx_t total_alive_found = iterations * purge_size - total_dead_found;
+	auto elapsed_ms =
+	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - purge_start).count();
 	if (iterations > 10 || elapsed_ms > 1000) {
 		DUCKDB_LOG_WARNING(db,
 		                   "EvictionQueue::Purge took %lldms with %llu iterations, "
@@ -256,7 +256,7 @@ void EvictionQueue::Purge(const DatabaseInstance &db) {
 	}
 }
 
-void EvictionQueue::PurgeIteration(const idx_t purge_size, idx_t &total_alive_found, idx_t &total_dead_found) {
+void EvictionQueue::PurgeIteration(const idx_t purge_size) {
 	// if this purge is significantly smaller or bigger than the previous purge, then
 	// we need to resize the purge_nodes vector. Note that this barely happens, as we
 	// purge queue_insertions * PURGE_SIZE_MULTIPLIER nodes
@@ -286,8 +286,6 @@ void EvictionQueue::PurgeIteration(const idx_t purge_size, idx_t &total_alive_fo
 	}
 
 	total_dead_nodes -= dead_count;
-	total_alive_found += alive_count;
-	total_dead_found += dead_count;
 
 	// Re-enqueue alive nodes via producer token — goes into a dedicated sub-queue
 	// that the consumer token has already passed
