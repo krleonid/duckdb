@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/thread.hpp"
 #include "duckdb/common/typedefs.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/parallel/concurrentqueue.hpp"
 #include "duckdb/parallel/task_scheduler.hpp"
@@ -96,7 +97,7 @@ public:
 	//! Tries to dequeue an element from the eviction queue, but only after acquiring the purge queue lock.
 	bool TryDequeueWithLock(BufferEvictionNode &node);
 	//! Garbage collect dead nodes in the eviction queue.
-	void Purge();
+	void Purge(const DatabaseInstance &db);
 	template <typename FN>
 	void IterateUnloadableBlocks(FN fn);
 
@@ -173,7 +174,7 @@ bool EvictionQueue::TryDequeueWithLock(BufferEvictionNode &node) {
 	return q.try_dequeue(node);
 }
 
-void EvictionQueue::Purge() {
+void EvictionQueue::Purge(const DatabaseInstance &db) {
 	// only one thread purges the queue, all other threads early-out
 	unique_lock<mutex> guard(purge_lock, std::try_to_lock);
 	if (!guard.owns_lock()) {
@@ -208,7 +209,12 @@ void EvictionQueue::Purge() {
 	// 2.3. We've purged the entire queue: max_purges is zero. This is a worst-case scenario,
 	// guaranteeing that we always exit the loop.
 
+	auto purge_start = std::chrono::steady_clock::now();
+	idx_t initial_q_size = approx_q_size;
+	idx_t initial_dead_nodes = total_dead_nodes.load();
+
 	idx_t max_purges = approx_q_size / purge_size;
+	idx_t initial_max_purges = max_purges;
 
 	while (max_purges != 0) {
 		PurgeIteration(purge_size);
@@ -231,6 +237,22 @@ void EvictionQueue::Purge() {
 		}
 
 		max_purges--;
+	}
+
+	idx_t iterations = initial_max_purges - max_purges;
+	idx_t total_dead_found = initial_dead_nodes - total_dead_nodes.load();
+	idx_t total_alive_found = iterations * purge_size - total_dead_found;
+	auto elapsed_ms =
+	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - purge_start).count();
+	if (iterations > 10 || elapsed_ms > 1000) {
+		DUCKDB_LOG_WARNING(db,
+		                   "EvictionQueue::Purge took %lldms with %llu iterations, "
+		                   "queue_size_before=%llu, queue_size_after=%llu, "
+		                   "dead_nodes_before=%llu, dead_nodes_after=%llu, "
+		                   "total_dequeued=%llu (alive=%llu, dead=%llu)",
+		                   elapsed_ms, iterations, initial_q_size, q.size_approx(),
+		                   initial_dead_nodes, (idx_t)total_dead_nodes,
+		                   total_alive_found + total_dead_found, total_alive_found, total_dead_found);
 	}
 }
 
@@ -524,7 +546,7 @@ void BufferPool::PurgeQueue(const BlockHandle &block) {
 	const auto queue_sleep_micros =
 	    Settings::Get<DebugEvictionQueueSleepMicroSecondsSetting>(buffer_manager.GetDatabase());
 	eviction_queue.debug_eviction_queue_sleep = queue_sleep_micros;
-	eviction_queue.Purge();
+	eviction_queue.Purge(buffer_manager.GetDatabase());
 }
 
 void BufferPool::SetLimit(idx_t limit, const char *exception_postscript) {
