@@ -103,8 +103,8 @@ struct UpdateInfo {
 	static void Initialize(UpdateInfo &info, DataTable &data_table, transaction_t transaction_id,
 	                       idx_t row_group_start);
 	//! Initialize with a specific capacity (for compact allocations)
-	static void Initialize(UpdateInfo &info, DataTable &data_table, transaction_t transaction_id,
-	                       idx_t row_group_start, idx_t capacity);
+	static void Initialize(UpdateInfo &info, DataTable &data_table, transaction_t transaction_id, idx_t row_group_start,
+	                       idx_t capacity);
 };
 
 } // namespace duckdb
