@@ -312,6 +312,13 @@ BufferHandle StandardBufferManager::Pin(const QueryContext &context, shared_ptr<
 
 	idx_t required_memory;
 	auto &block_memory = handle->GetMemory();
+
+	// Fast path: if the block is loaded and has active readers, we can pin without the mutex.
+	// Safety: readers > 0 guarantees no concurrent unload (CanUnload checks readers > 0).
+	if (block_memory.GetState() == BlockState::BLOCK_LOADED && block_memory.TryIncrementReadersIfPositive()) {
+		return BufferHandle(handle, block_memory.GetBuffer());
+	}
+
 	{
 		// lock the block
 		auto lock = block_memory.GetLock();
@@ -394,16 +401,24 @@ void StandardBufferManager::VerifyZeroReaders(BlockLock &lock, shared_ptr<BlockH
 }
 
 void StandardBufferManager::Unpin(shared_ptr<BlockHandle> &handle) {
-	bool purge = false;
 	auto &block_memory = handle->GetMemory();
+
+	// Fast path: if there are multiple readers, just decrement atomically.
+	// No state transition happens when readers goes from N>1 to N-1>0.
+	auto new_readers = block_memory.DecrementReadersAtomic();
+	if (new_readers > 0) {
+		return;
+	}
+
+	// Slow path: readers hit 0, need to handle eviction queue or unload.
+	// We already decremented, so re-acquire lock to handle the transition.
+	bool purge = false;
 	{
 		auto lock = block_memory.GetLock();
 		if (!block_memory.GetBuffer(lock) || block_memory.GetBufferType() == FileBufferType::TINY_BUFFER) {
 			return;
 		}
-		D_ASSERT(block_memory.GetReaders() > 0);
-		auto new_readers = block_memory.DecrementReaders();
-		if (new_readers == 0) {
+		if (block_memory.GetReaders() == 0) {
 			VerifyZeroReaders(lock, handle);
 			if (block_memory.MustAddToEvictionQueue()) {
 				purge = buffer_pool.AddToEvictionQueue(handle);
