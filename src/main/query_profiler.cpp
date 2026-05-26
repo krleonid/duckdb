@@ -2,6 +2,7 @@
 
 #include "duckdb/common/enums/metric_type.hpp"
 #include "duckdb/common/fstream.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/printer.hpp"
@@ -392,7 +393,17 @@ void OperatorProfiler::EndOperator(optional_ptr<DataChunk> chunk) {
 			info.AddMetric(MetricType::OPERATOR_CARDINALITY, chunk->size());
 		}
 		if (ProfilingInfo::Enabled(settings, MetricType::RESULT_SET_SIZE) && chunk) {
+			auto get_data_size_start = std::chrono::steady_clock::now();
 			auto result_set_size = chunk->GetDataSize();
+			auto get_data_size_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+			    std::chrono::steady_clock::now() - get_data_size_start).count();
+			if (get_data_size_ms > 100) {
+				DUCKDB_LOG_WARNING(context,
+				                   "GetDataSize() took %lldms for chunk with %llu rows and %llu columns "
+				                   "(result_set_size=%llu bytes)",
+				                   get_data_size_ms, chunk->size(), chunk->ColumnCount(),
+				                   result_set_size);
+			}
 			info.AddMetric(MetricType::RESULT_SET_SIZE, result_set_size);
 		}
 		if (ProfilingInfo::Enabled(settings, MetricType::SYSTEM_PEAK_BUFFER_MEMORY)) {
