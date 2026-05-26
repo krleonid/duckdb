@@ -86,6 +86,22 @@ public:
 	void SetReaders(int32_t n) {
 		readers = n;
 	}
+	//! Try to increment readers from a positive value without holding the lock.
+	//! Returns true if successful (block was loaded and had active readers).
+	bool TryIncrementReadersIfPositive() {
+		auto current = readers.load(std::memory_order_relaxed);
+		while (current > 0) {
+			if (readers.compare_exchange_weak(current, current + 1, std::memory_order_acquire,
+			                                  std::memory_order_relaxed)) {
+				return true;
+			}
+		}
+		return false;
+	}
+	//! Atomically decrement readers and return the new value.
+	int32_t DecrementReadersAtomic() {
+		return readers.fetch_sub(1, std::memory_order_release) - 1;
+	}
 	//! Returns the memory tag.
 	MemoryTag GetMemoryTag() const {
 		return tag;

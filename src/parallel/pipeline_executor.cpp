@@ -1,6 +1,7 @@
 #include "duckdb/parallel/pipeline_executor.hpp"
 
 #include "duckdb/common/limits.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_context.hpp"
 
 #ifdef DUCKDB_DEBUG_ASYNC_SINK_SOURCE
@@ -189,6 +190,8 @@ PipelineExecuteResult PipelineExecutor::Execute(idx_t max_chunks) {
 	D_ASSERT(pipeline.sink);
 	auto &source_chunk = pipeline.operators.empty() ? final_chunk : *intermediate_chunks[0];
 	ExecutionBudget chunk_budget(max_chunks);
+	auto execute_start = std::chrono::steady_clock::now();
+	idx_t chunks_processed = 0;
 	do {
 		if (context.client.interrupted) {
 			throw InterruptException();
@@ -228,6 +231,7 @@ PipelineExecuteResult PipelineExecutor::Execute(idx_t max_chunks) {
 				// "Regular" path: fetch a chunk from the source and push it through the pipeline
 				source_chunk.Reset();
 				source_result = FetchFromSource(source_chunk);
+				chunks_processed++;
 				if (source_result == SourceResultType::BLOCKED) {
 					return PipelineExecuteResult::INTERRUPTED;
 				}
@@ -268,6 +272,14 @@ PipelineExecuteResult PipelineExecutor::Execute(idx_t max_chunks) {
 
 	if ((!exhausted_pipeline || !done_flushing) && !IsFinished()) {
 		return PipelineExecuteResult::NOT_FINISHED;
+	}
+
+	auto execute_ms =
+	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - execute_start).count();
+	if (execute_ms > 200) {
+		DUCKDB_LOG_WARNING(context.client,
+		                   "PipelineExecutor::Execute took %lldms for %llu chunks, pipeline has %llu operators",
+		                   execute_ms, chunks_processed, pipeline.operators.size());
 	}
 
 	return PushFinalize();
@@ -355,6 +367,8 @@ PipelineExecuteResult PipelineExecutor::PushFinalize() {
 		throw InternalException("Calling PushFinalize on a pipeline that has been finalized already");
 	}
 
+	auto finalize_start = std::chrono::steady_clock::now();
+
 	D_ASSERT(local_sink_state);
 
 	// Run the combine for the sink
@@ -390,6 +404,15 @@ PipelineExecuteResult PipelineExecutor::PushFinalize() {
 		intermediate_states[i]->Finalize(pipeline.operators[i].get(), context);
 	}
 	pipeline.executor.Flush(thread);
+
+	auto finalize_ms =
+	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - finalize_start)
+	        .count();
+	if (finalize_ms > 200) {
+		DUCKDB_LOG_WARNING(context.client, "PipelineExecutor::PushFinalize took %lldms (combine + profiler flush)",
+		                   finalize_ms);
+	}
+
 	local_sink_state.reset();
 
 	return PipelineExecuteResult::FINISHED;
