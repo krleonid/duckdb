@@ -6,52 +6,137 @@
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/metadata/metadata_manager.hpp"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 namespace duckdb {
+
+#ifdef _WIN32
+using RWLockType = SRWLOCK;
+#else
+using RWLockType = pthread_rwlock_t;
+#endif
+
+static_assert(sizeof(RWLockType) <= 200, "blocks_lock_storage too small");
+static_assert(alignof(RWLockType) <= 8, "blocks_lock_storage alignment insufficient");
+
+static RWLockType &GetBlocksLock(char *storage) {
+	return *reinterpret_cast<RWLockType *>(storage);
+}
+
+class ReadLockGuard {
+public:
+	explicit ReadLockGuard(RWLockType &lock) : lock_(lock) {
+#ifdef _WIN32
+		AcquireSRWLockShared(&lock_);
+#else
+		pthread_rwlock_rdlock(&lock_);
+#endif
+	}
+	~ReadLockGuard() {
+#ifdef _WIN32
+		ReleaseSRWLockShared(&lock_);
+#else
+		pthread_rwlock_unlock(&lock_);
+#endif
+	}
+	ReadLockGuard(const ReadLockGuard &) = delete;
+	ReadLockGuard &operator=(const ReadLockGuard &) = delete;
+
+private:
+	RWLockType &lock_;
+};
+
+class WriteLockGuard {
+public:
+	explicit WriteLockGuard(RWLockType &lock) : lock_(lock) {
+#ifdef _WIN32
+		AcquireSRWLockExclusive(&lock_);
+#else
+		pthread_rwlock_wrlock(&lock_);
+#endif
+	}
+	~WriteLockGuard() {
+#ifdef _WIN32
+		ReleaseSRWLockExclusive(&lock_);
+#else
+		pthread_rwlock_unlock(&lock_);
+#endif
+	}
+	WriteLockGuard(const WriteLockGuard &) = delete;
+	WriteLockGuard &operator=(const WriteLockGuard &) = delete;
+
+private:
+	RWLockType &lock_;
+};
 
 BlockManager::BlockManager(BufferManager &buffer_manager, const optional_idx block_alloc_size_p,
                            const optional_idx block_header_size_p)
     : buffer_manager(buffer_manager), metadata_manager(make_uniq<MetadataManager>(*this, buffer_manager)),
       block_alloc_size(block_alloc_size_p), block_header_size(block_header_size_p) {
+	auto &lock = GetBlocksLock(blocks_lock_storage);
+#ifdef _WIN32
+	InitializeSRWLock(&lock);
+#else
+	pthread_rwlock_init(&lock, nullptr);
+#endif
+}
+
+BlockManager::~BlockManager() {
+#ifndef _WIN32
+	pthread_rwlock_destroy(&GetBlocksLock(blocks_lock_storage));
+#endif
 }
 
 bool BlockManager::BlockIsRegistered(block_id_t block_id) {
-	lock_guard<mutex> lock(blocks_lock);
-	// check if the block already exists
+	ReadLockGuard guard(GetBlocksLock(blocks_lock_storage));
 	auto entry = blocks.find(block_id);
 	if (entry == blocks.end()) {
 		return false;
 	}
-	// already exists: check if it hasn't expired yet
 	return !entry->second.expired();
 }
 
 shared_ptr<BlockHandle> BlockManager::TryGetBlock(block_id_t block_id) {
-	lock_guard<mutex> lock(blocks_lock);
-	// check if the block already exists
+	ReadLockGuard guard(GetBlocksLock(blocks_lock_storage));
 	auto entry = blocks.find(block_id);
 	if (entry == blocks.end()) {
-		// the block does not exist
 		return nullptr;
 	}
-	// the block exists - try to lock it
 	return entry->second.lock();
 }
 
 shared_ptr<BlockHandle> BlockManager::RegisterBlock(block_id_t block_id) {
-	lock_guard<mutex> lock(blocks_lock);
-	// check if the block already exists
+	// Fast path: read lock to check if already registered
+	{
+		ReadLockGuard guard(GetBlocksLock(blocks_lock_storage));
+		auto entry = blocks.find(block_id);
+		if (entry != blocks.end()) {
+			auto existing_ptr = entry->second.lock();
+			if (existing_ptr) {
+				return existing_ptr;
+			}
+		}
+	}
+	// Slow path: write lock to insert
+	WriteLockGuard guard(GetBlocksLock(blocks_lock_storage));
 	auto entry = blocks.find(block_id);
 	if (entry != blocks.end()) {
-		// already exists: check if it hasn't expired yet
 		auto existing_ptr = entry->second.lock();
 		if (existing_ptr) {
-			//! it hasn't! return it
 			return existing_ptr;
 		}
 	}
-	// create a new block pointer for this block
 	auto result = make_shared_ptr<BlockHandle>(*this, block_id, MemoryTag::BASE_TABLE);
-	// register the block pointer in the set of blocks as a weak pointer
 	blocks[block_id] = weak_ptr<BlockHandle>(result);
 	return result;
 }
@@ -122,8 +207,7 @@ shared_ptr<BlockHandle> BlockManager::ConvertToPersistent(QueryContext context, 
 
 void BlockManager::UnregisterBlock(block_id_t id) {
 	D_ASSERT(id < MAXIMUM_BLOCK);
-	lock_guard<mutex> lock(blocks_lock);
-	// on-disk block: erase from list of blocks in manager
+	WriteLockGuard guard(GetBlocksLock(blocks_lock_storage));
 	blocks.erase(id);
 }
 
