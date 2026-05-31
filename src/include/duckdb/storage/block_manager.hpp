@@ -33,7 +33,7 @@ public:
 	BlockManager() = delete;
 	BlockManager(BufferManager &buffer_manager, const optional_idx block_alloc_size_p,
 	             const optional_idx block_header_size_p);
-	virtual ~BlockManager() = default;
+	virtual ~BlockManager();
 
 	//! The buffer manager
 	BufferManager &buffer_manager;
@@ -188,8 +188,8 @@ protected:
 	bool in_destruction = false;
 
 private:
-	//! The lock for the set of blocks
-	mutex blocks_lock;
+	//! Read-write lock storage — initialized in constructor, platform-specific
+	alignas(8) char blocks_lock_storage[200];
 	//! A mapping of block id -> BlockHandle
 	unordered_map<block_id_t, weak_ptr<BlockHandle>> blocks;
 	//! The metadata manager
