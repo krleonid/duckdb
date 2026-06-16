@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include <chrono>
 
 namespace duckdb {
 class ClientContext;
@@ -58,6 +59,8 @@ public:
 
 public:
 	optional_ptr<ProducerToken> token;
+	//! Timestamp when the task was enqueued, used for measuring queue wait time
+	std::chrono::high_resolution_clock::time_point enqueue_time;
 };
 
 } // namespace duckdb

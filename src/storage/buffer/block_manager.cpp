@@ -5,6 +5,8 @@
 #include "duckdb/storage/buffer/buffer_pool.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/metadata/metadata_manager.hpp"
+#include "duckdb/logging/logger.hpp"
+#include <chrono>
 
 namespace duckdb {
 
@@ -15,7 +17,18 @@ BlockManager::BlockManager(BufferManager &buffer_manager, const optional_idx blo
 }
 
 bool BlockManager::BlockIsRegistered(block_id_t block_id) {
+	auto start = std::chrono::steady_clock::now();
 	lock_guard<mutex> lock(blocks_lock);
+	auto end = std::chrono::steady_clock::now();
+	auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	if (wait_ms > 10) {
+		try {
+			auto &db = buffer_manager.GetDatabase();
+			DUCKDB_LOG_WARNING(db, "Lock wait in BlockIsRegistered took " + to_string(wait_ms) + "ms");
+		} catch (...) {
+			// Silently ignore if database is not available
+		}
+	}
 	// check if the block already exists
 	auto entry = blocks.find(block_id);
 	if (entry == blocks.end()) {
@@ -26,7 +39,18 @@ bool BlockManager::BlockIsRegistered(block_id_t block_id) {
 }
 
 shared_ptr<BlockHandle> BlockManager::TryGetBlock(block_id_t block_id) {
+	auto start = std::chrono::steady_clock::now();
 	lock_guard<mutex> lock(blocks_lock);
+	auto end = std::chrono::steady_clock::now();
+	auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	if (wait_ms > 10) {
+		try {
+			auto &db = buffer_manager.GetDatabase();
+			DUCKDB_LOG_WARNING(db, "Lock wait in TryGetBlock took " + to_string(wait_ms) + "ms");
+		} catch (...) {
+			// Silently ignore if database is not available
+		}
+	}
 	// check if the block already exists
 	auto entry = blocks.find(block_id);
 	if (entry == blocks.end()) {
@@ -38,7 +62,18 @@ shared_ptr<BlockHandle> BlockManager::TryGetBlock(block_id_t block_id) {
 }
 
 shared_ptr<BlockHandle> BlockManager::RegisterBlock(block_id_t block_id) {
+	auto start = std::chrono::steady_clock::now();
 	lock_guard<mutex> lock(blocks_lock);
+	auto end = std::chrono::steady_clock::now();
+	auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	if (wait_ms > 10) {
+		try {
+			auto &db = buffer_manager.GetDatabase();
+			DUCKDB_LOG_WARNING(db, "Lock wait in RegisterBlock took " + to_string(wait_ms) + "ms");
+		} catch (...) {
+			// Silently ignore if database is not available
+		}
+	}
 	// check if the block already exists
 	auto entry = blocks.find(block_id);
 	if (entry != blocks.end()) {
@@ -122,7 +157,18 @@ shared_ptr<BlockHandle> BlockManager::ConvertToPersistent(QueryContext context, 
 
 void BlockManager::UnregisterBlock(block_id_t id) {
 	D_ASSERT(id < MAXIMUM_BLOCK);
+	auto start = std::chrono::steady_clock::now();
 	lock_guard<mutex> lock(blocks_lock);
+	auto end = std::chrono::steady_clock::now();
+	auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	if (wait_ms > 10) {
+		try {
+			auto &db = buffer_manager.GetDatabase();
+			DUCKDB_LOG_WARNING(db, "Lock wait in UnregisterBlock took " + to_string(wait_ms) + "ms");
+		} catch (...) {
+			// Silently ignore if database is not available
+		}
+	}
 	// on-disk block: erase from list of blocks in manager
 	blocks.erase(id);
 }
