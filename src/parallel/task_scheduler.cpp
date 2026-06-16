@@ -73,7 +73,7 @@ struct QueueProducerToken {
 };
 
 void ConcurrentQueue::Enqueue(ProducerToken &token, shared_ptr<Task> task) {
-	task->enqueue_time = std::chrono::high_resolution_clock::now();
+	task->enqueue_time = std::chrono::steady_clock::now();
 	lock_guard<mutex> producer_lock(token.producer_lock);
 	task->token = token;
 	if (q.enqueue(token.token->queue_token, std::move(task))) {
@@ -86,7 +86,7 @@ void ConcurrentQueue::Enqueue(ProducerToken &token, shared_ptr<Task> task) {
 
 void ConcurrentQueue::EnqueueBulk(ProducerToken &token, vector<shared_ptr<Task>> &tasks) {
 	typedef std::make_signed<std::size_t>::type ssize_t;
-	auto enqueue_time = std::chrono::high_resolution_clock::now();
+	auto enqueue_time = std::chrono::steady_clock::now();
 	lock_guard<mutex> producer_lock(token.producer_lock);
 	for (auto &task : tasks) {
 		task->token = token;
@@ -304,15 +304,18 @@ void TaskScheduler::ExecuteForever(atomic<bool> *marker) {
 			}
 		}
 		if (queue->Dequeue(task)) {
-			auto dequeue_time = std::chrono::high_resolution_clock::now();
-			auto queue_wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-				dequeue_time - task->enqueue_time).count();
-			if (queue_wait_ms > 100) {
-				try {
-					DUCKDB_LOG_WARNING(db, "Task waited " + to_string(queue_wait_ms) +
-										"ms in queue before worker picked it up");
-				} catch (...) {
-					// Silently ignore if logging fails
+			// Only log if enqueue_time was properly initialized (not epoch)
+			if (task->enqueue_time != std::chrono::steady_clock::time_point{}) {
+				auto dequeue_time = std::chrono::steady_clock::now();
+				auto queue_wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+					dequeue_time - task->enqueue_time).count();
+				if (queue_wait_ms > 100) {
+					try {
+						DUCKDB_LOG_WARNING(db, "Task waited " + to_string(queue_wait_ms) +
+											"ms in queue before worker picked it up");
+					} catch (...) {
+						// Silently ignore if logging fails
+					}
 				}
 			}
 			auto process_mode = TaskExecutionMode::PROCESS_ALL;
