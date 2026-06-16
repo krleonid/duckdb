@@ -3,6 +3,7 @@
 #include "duckdb/common/chrono.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/settings.hpp"
@@ -72,6 +73,7 @@ struct QueueProducerToken {
 };
 
 void ConcurrentQueue::Enqueue(ProducerToken &token, shared_ptr<Task> task) {
+	task->enqueue_time = std::chrono::high_resolution_clock::now();
 	lock_guard<mutex> producer_lock(token.producer_lock);
 	task->token = token;
 	if (q.enqueue(token.token->queue_token, std::move(task))) {
@@ -84,9 +86,11 @@ void ConcurrentQueue::Enqueue(ProducerToken &token, shared_ptr<Task> task) {
 
 void ConcurrentQueue::EnqueueBulk(ProducerToken &token, vector<shared_ptr<Task>> &tasks) {
 	typedef std::make_signed<std::size_t>::type ssize_t;
+	auto enqueue_time = std::chrono::high_resolution_clock::now();
 	lock_guard<mutex> producer_lock(token.producer_lock);
 	for (auto &task : tasks) {
 		task->token = token;
+		task->enqueue_time = enqueue_time;
 	}
 	if (q.enqueue_bulk(token.token->queue_token, std::make_move_iterator(tasks.begin()), tasks.size())) {
 		tasks_in_queue += tasks.size();
@@ -300,6 +304,17 @@ void TaskScheduler::ExecuteForever(atomic<bool> *marker) {
 			}
 		}
 		if (queue->Dequeue(task)) {
+			auto dequeue_time = std::chrono::high_resolution_clock::now();
+			auto queue_wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+				dequeue_time - task->enqueue_time).count();
+			if (queue_wait_ms > 100) {
+				try {
+					DUCKDB_LOG_WARNING(db, "Task waited " + to_string(queue_wait_ms) +
+										"ms in queue before worker picked it up");
+				} catch (...) {
+					// Silently ignore if logging fails
+				}
+			}
 			auto process_mode = TaskExecutionMode::PROCESS_ALL;
 			if (Settings::Get<SchedulerProcessPartialSetting>(config)) {
 				process_mode = TaskExecutionMode::PROCESS_PARTIAL;
