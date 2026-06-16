@@ -305,14 +305,14 @@ void TaskScheduler::ExecuteForever(atomic<bool> *marker) {
 		}
 		if (queue->Dequeue(task)) {
 			// Only log if enqueue_time was properly initialized (not epoch)
-			if (task->enqueue_time != std::chrono::steady_clock::time_point{}) {
+			if (task->enqueue_time != std::chrono::steady_clock::time_point {}) {
 				auto dequeue_time = std::chrono::steady_clock::now();
-				auto queue_wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-					dequeue_time - task->enqueue_time).count();
+				auto queue_wait_ms =
+				    std::chrono::duration_cast<std::chrono::milliseconds>(dequeue_time - task->enqueue_time).count();
 				if (queue_wait_ms > 100) {
 					try {
 						DUCKDB_LOG_WARNING(db, "Task waited " + to_string(queue_wait_ms) +
-											"ms in queue before worker picked it up");
+						                           "ms in queue before worker picked it up");
 					} catch (...) {
 						// Silently ignore if logging fails
 					}
