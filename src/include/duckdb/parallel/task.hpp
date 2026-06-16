@@ -60,7 +60,7 @@ public:
 public:
 	optional_ptr<ProducerToken> token;
 	//! Timestamp when the task was enqueued, used for measuring queue wait time
-	std::chrono::high_resolution_clock::time_point enqueue_time;
+	std::chrono::steady_clock::time_point enqueue_time;
 };
 
 } // namespace duckdb
