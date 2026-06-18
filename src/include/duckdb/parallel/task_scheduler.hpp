@@ -110,6 +110,21 @@ private:
 	atomic<int32_t> requested_thread_count;
 	//! The amount of threads currently running
 	atomic<int32_t> current_thread_count;
+	//! The number of background workers currently executing a task (busy). Used for observability only.
+	atomic<int32_t> busy_workers;
+
+public:
+	//! Returns the number of background workers currently executing a task. Observability only.
+	int32_t GetBusyWorkerCount() const {
+		return busy_workers.load();
+	}
+	//! RAII helper to mark a worker busy/idle around task execution.
+	void IncrementBusyWorkers() {
+		++busy_workers;
+	}
+	void DecrementBusyWorkers() {
+		--busy_workers;
+	}
 };
 
 } // namespace duckdb
