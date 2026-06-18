@@ -232,7 +232,7 @@ TaskScheduler::TaskScheduler(DatabaseInstance &db)
     : db(db), queue(make_uniq<ConcurrentQueue>()),
       allocator_flush_threshold(db.config.options.allocator_flush_threshold),
       allocator_background_threads(Settings::Get<AllocatorBackgroundThreadsSetting>(db)), requested_thread_count(0),
-      current_thread_count(1) {
+      current_thread_count(1), busy_workers(0) {
 	SetAllocatorBackgroundThreads(allocator_background_threads);
 }
 
@@ -304,6 +304,9 @@ void TaskScheduler::ExecuteForever(atomic<bool> *marker) {
 			}
 		}
 		if (queue->Dequeue(task)) {
+			// This worker just transitioned idle->busy by picking up a task. Count it as busy before logging
+			// so the snapshot below can reach the busy==total saturation signature.
+			++busy_workers;
 			// Only log if enqueue_time was properly initialized (not epoch)
 			if (task->enqueue_time != std::chrono::steady_clock::time_point {}) {
 				auto dequeue_time = std::chrono::steady_clock::now();
@@ -311,8 +314,18 @@ void TaskScheduler::ExecuteForever(atomic<bool> *marker) {
 				    std::chrono::duration_cast<std::chrono::milliseconds>(dequeue_time - task->enqueue_time).count();
 				if (queue_wait_ms > 100) {
 					try {
-						DUCKDB_LOG_WARNING(db, "Task waited " + to_string(queue_wait_ms) +
-						                           "ms in queue before worker picked it up");
+						// LOG 1: queue waiting time + task type.
+						// busy_workers/current_thread_count = workers currently inside Execute() vs total workers.
+						// tasks_in_queue = remaining queue depth at the moment this task was picked up.
+						// Read the table in the design notes: busy==total + depth>0 -> saturation/head-of-line
+						// blocking; busy<total + depth>0 -> scheduler bug (free worker, task not picked up);
+						// low busy + small depth + long wait -> OS/cgroup CPU throttling.
+						DUCKDB_LOG_WARNING(db,
+						                   "Task waited " + to_string(queue_wait_ms) +
+						                       "ms in queue before worker picked it up (task_type=" + task->TaskType() +
+						                       ", busy_workers=" + to_string(busy_workers.load()) + "/" +
+						                       to_string(current_thread_count.load()) +
+						                       ", queue_depth=" + to_string(queue->GetTasksInQueue()) + ")");
 					} catch (...) {
 						// Silently ignore if logging fails
 					}
@@ -322,7 +335,38 @@ void TaskScheduler::ExecuteForever(atomic<bool> *marker) {
 			if (Settings::Get<SchedulerProcessPartialSetting>(config)) {
 				process_mode = TaskExecutionMode::PROCESS_PARTIAL;
 			}
-			auto execute_result = task->Execute(process_mode);
+			// Capture the task type before Execute(): a TASK_FINISHED task may be reset right after, and in
+			// PROCESS_ALL mode this measures the whole task, while in PROCESS_PARTIAL mode it measures one slice.
+			auto task_type = task->TaskType();
+			auto execute_begin = std::chrono::steady_clock::now();
+			TaskExecutionResult execute_result;
+			try {
+				execute_result = task->Execute(process_mode);
+			} catch (...) {
+				--busy_workers;
+				throw;
+			}
+			--busy_workers;
+			{
+				auto execute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+				                      std::chrono::steady_clock::now() - execute_begin)
+				                      .count();
+				if (execute_ms > 100) {
+					try {
+						// LOG 2: execution time + task type. A long-running, non-preemptive task here is what
+						// holds a worker and causes the queue waits reported by LOG 1.
+						DUCKDB_LOG_WARNING(
+						    db, "Task ran for " + to_string(execute_ms) +
+						            "ms before releasing the worker (task_type=" + task_type + ", mode=" +
+						            (process_mode == TaskExecutionMode::PROCESS_PARTIAL ? "partial" : "all") +
+						            ", busy_workers=" + to_string(busy_workers.load()) + "/" +
+						            to_string(current_thread_count.load()) +
+						            ", queue_depth=" + to_string(queue->GetTasksInQueue()) + ")");
+					} catch (...) {
+						// Silently ignore if logging fails
+					}
+				}
+			}
 
 			switch (execute_result) {
 			case TaskExecutionResult::TASK_FINISHED:
