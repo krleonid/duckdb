@@ -20,6 +20,17 @@ PipelineTask::PipelineTask(Pipeline &pipeline_p, shared_ptr<Event> event_p)
     : ExecutorTask(pipeline_p.executor, std::move(event_p)), pipeline(pipeline_p) {
 }
 
+string PipelineTask::TaskType() const {
+	string result = "PipelineTask";
+	if (pipeline.GetSource()) {
+		result += "[src=" + pipeline.GetSource()->GetName() + "]";
+	}
+	if (pipeline.GetSink()) {
+		result += "[sink=" + pipeline.GetSink()->GetName() + "]";
+	}
+	return result;
+}
+
 bool PipelineTask::TaskBlockedOnResult() const {
 	// If this returns true, it means the pipeline this task belongs to has a cached chunk
 	// that was the result of the Sink method returning BLOCKED

@@ -351,7 +351,7 @@ void TaskScheduler::ExecuteForever(atomic<bool> *marker) {
 				auto execute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
 				                      std::chrono::steady_clock::now() - execute_begin)
 				                      .count();
-				if (execute_ms > 100) {
+				if (execute_ms > 500) {
 					try {
 						// LOG 2: execution time + task type. A long-running, non-preemptive task here is what
 						// holds a worker and causes the queue waits reported by LOG 1.
