@@ -33,9 +33,7 @@ public:
 	Pipeline &pipeline;
 	unique_ptr<PipelineExecutor> pipeline_executor;
 
-	string TaskType() const override {
-		return "PipelineTask";
-	}
+	string TaskType() const override;
 
 public:
 	const PipelineExecutor &GetPipelineExecutor() const;

@@ -61,6 +61,10 @@ public:
 	}
 
 	string TaskType() const override {
+		auto sink = pipeline.GetSink();
+		if (sink) {
+			return "PipelineFinishTask[sink=" + sink->GetName() + "]";
+		}
 		return "PipelineFinishTask";
 	}
 
