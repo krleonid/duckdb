@@ -253,19 +253,66 @@ void ColumnData::SelectVector(ColumnScanState &state, Vector &result, idx_t targ
                               idx_t sel_count) {
 	BeginScanVectorInternal(state);
 	auto &current = state.current->GetNode();
-	if (state.current->GetRowStart() + current.count - state.offset_in_column < target_count) {
-		throw InternalException("ColumnData::SelectVector should be able to fetch everything from one segment");
-	}
-	if (state.scan_options && state.scan_options->force_fetch_row) {
-		for (idx_t i = 0; i < sel_count; i++) {
-			auto source_idx = sel.get_index(i);
-			ColumnFetchState fetch_state;
-			current.FetchRow(fetch_state, UnsafeNumericCast<row_t>(state.offset_in_column + source_idx), result, i);
+	idx_t remaining_in_segment = state.current->GetRowStart() + current.count - state.offset_in_column;
+
+	if (remaining_in_segment >= target_count) {
+		// Fast path: entire vector fits in one segment
+		if (state.scan_options && state.scan_options->force_fetch_row) {
+			for (idx_t i = 0; i < sel_count; i++) {
+				auto source_idx = sel.get_index(i);
+				ColumnFetchState fetch_state;
+				current.FetchRow(fetch_state, UnsafeNumericCast<row_t>(state.offset_in_column + source_idx), result, i);
+			}
+		} else {
+			current.Select(state, target_count, result, sel, sel_count);
 		}
-	} else {
-		current.Select(state, target_count, result, sel, sel_count);
+		state.offset_in_column += target_count;
+		state.internal_index = state.offset_in_column;
+		return;
 	}
-	state.offset_in_column += target_count;
+
+	// Cross-segment path: split selection across segments
+	idx_t vector_offset = 0;
+	idx_t result_offset = 0;
+	idx_t sel_idx = 0;
+
+	while (vector_offset < target_count && sel_idx < sel_count) {
+		auto &seg = state.current->GetNode();
+		idx_t seg_remaining = state.current->GetRowStart() + seg.count - state.offset_in_column;
+		idx_t scan_count = MinValue<idx_t>(target_count - vector_offset, seg_remaining);
+		idx_t segment_end = vector_offset + scan_count;
+
+		// Find selected rows that fall in this segment
+		idx_t seg_sel_start = sel_idx;
+		while (sel_idx < sel_count && sel.get_index(sel_idx) < segment_end) {
+			sel_idx++;
+		}
+		idx_t seg_sel_count = sel_idx - seg_sel_start;
+
+		if (seg_sel_count > 0) {
+			// Build local selection vector relative to segment start
+			SelectionVector seg_sel(seg_sel_count);
+			for (idx_t i = 0; i < seg_sel_count; i++) {
+				seg_sel.set_index(i, sel.get_index(seg_sel_start + i) - vector_offset);
+			}
+			seg.Select(state, scan_count, result, seg_sel, seg_sel_count, result_offset);
+			result_offset += seg_sel_count;
+		}
+
+		state.offset_in_column += scan_count;
+		vector_offset += scan_count;
+
+		if (vector_offset < target_count) {
+			auto next = data.GetNextSegment(*state.current);
+			if (!next) {
+				break;
+			}
+			state.previous_states.emplace_back(std::move(state.scan_state));
+			state.current = next;
+			state.current->GetNode().InitializeScan(state);
+			state.segment_checked = false;
+		}
+	}
 	state.internal_index = state.offset_in_column;
 }
 

@@ -190,11 +190,12 @@ void CompressedStringScanState::ScanToFlatVector(Vector &result, idx_t result_of
 	result.Verify();
 }
 
-void CompressedStringScanState::Select(Vector &result, idx_t start, const SelectionVector &sel, idx_t sel_count) {
+void CompressedStringScanState::Select(Vector &result, idx_t result_offset, idx_t start, const SelectionVector &sel,
+                                       idx_t sel_count) {
 	D_ASSERT(!dictionary);
 	D_ASSERT(mode == DictFSSTMode::FSST_ONLY);
 	idx_t start_offset = start + 1;
-	auto result_data = FlatVector::Writer<string_t>(result, sel_count);
+	auto result_data = FlatVector::Writer<string_t>(result, result_offset + sel_count, result_offset);
 	for (idx_t i = 0; i < sel_count; i++) {
 		// Lookup dict offset in index buffer
 		auto string_number = start_offset + sel.get_index(i);

@@ -189,7 +189,7 @@ typedef void (*compression_scan_partial_t)(ColumnSegment &segment, ColumnScanSta
                                            Vector &result, idx_t result_offset);
 //! Function prototype used for reading a subset of the values of a vector indicated by a selection vector
 typedef void (*compression_select_t)(ColumnSegment &segment, ColumnScanState &state, idx_t vector_count, Vector &result,
-                                     const SelectionVector &sel, idx_t sel_count);
+                                     const SelectionVector &sel, idx_t sel_count, idx_t result_offset);
 //! Function prototype used for applying a filter to a vector while scanning that vector
 typedef void (*compression_filter_t)(ColumnSegment &segment, ColumnScanState &state, idx_t vector_count, Vector &result,
                                      SelectionVector &sel, idx_t &sel_count, const TableFilter &filter,
