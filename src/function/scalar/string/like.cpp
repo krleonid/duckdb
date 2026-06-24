@@ -549,10 +549,12 @@ void ILikeEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result
 	// non-constant pattern/escape: fall back to the generic per-row implementation
 	if (INVERT) {
 		TernaryExecutor::Execute<string_t, string_t, string_t, bool>(
-		    str_vec, pattern_vec, escape_vec, result, NotILikeEscapeOperator::Operation<string_t, string_t, string_t>);
+		    str_vec, pattern_vec, escape_vec, result, args.size(),
+		    NotILikeEscapeOperator::Operation<string_t, string_t, string_t>);
 	} else {
 		TernaryExecutor::Execute<string_t, string_t, string_t, bool>(
-		    str_vec, pattern_vec, escape_vec, result, ILikeEscapeOperator::Operation<string_t, string_t, string_t>);
+		    str_vec, pattern_vec, escape_vec, result, args.size(),
+		    ILikeEscapeOperator::Operation<string_t, string_t, string_t>);
 	}
 }
 
