@@ -200,7 +200,9 @@ void EvictionQueue::Purge() {
 		}
 
 		idx_t approx_dead_nodes = total_dead_nodes;
-		approx_dead_nodes = approx_dead_nodes > approx_q_size ? approx_q_size : approx_dead_nodes;
+		if (approx_dead_nodes > approx_q_size) {
+			break;
+		}
 		idx_t approx_alive_nodes = approx_q_size - approx_dead_nodes;
 
 		// early-out according to (2.2)
