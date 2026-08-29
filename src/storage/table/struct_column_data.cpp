@@ -211,6 +211,56 @@ idx_t StructColumnData::ScanCount(ColumnScanState &state, Vector &result, idx_t 
 	return scan_count;
 }
 
+void StructColumnData::Select(TransactionData transaction, idx_t vector_index, ColumnScanState &state, Vector &result,
+                              SelectionVector &sel, idx_t sel_count) {
+	if (state.storage_index.IsPushdownExtract()) {
+		// Pushdown extract mode — use generic path
+		ColumnData::Select(transaction, vector_index, state, result, sel, sel_count);
+		return;
+	}
+	auto target_count = GetVectorCount(vector_index);
+	validity->Scan(transaction, vector_index, state.child_states[0], result, target_count);
+	if (result.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		if (!ConstantVector::IsNull(result)) {
+			throw InternalException("StructColumnData::Select returned a constant but not NULL vector");
+		}
+		auto struct_children = GetStructChildren(state);
+		for (auto &child : struct_children) {
+			if (child.should_scan) {
+				child.col.Skip(child.state);
+			}
+		}
+		return;
+	}
+	auto struct_children = GetStructChildren(state);
+	for (auto &child : struct_children) {
+		auto &target_vector = GetFieldVectorForScan(result, child.vector_index);
+		if (!child.should_scan) {
+			ConstantVector::SetNull(target_vector, count_t(sel_count));
+			continue;
+		}
+		if (child.state.expression_state) {
+			ScanChild(child.state, target_vector, [&](Vector &child_result) {
+				return child.col.Scan(transaction, vector_index, child.state, child_result, target_count);
+			});
+			target_vector.Slice(sel, sel_count);
+		} else {
+			child.col.Select(transaction, vector_index, child.state, target_vector, sel, sel_count);
+		}
+	}
+	auto &vmask = FlatVector::ValidityMutable(result);
+	if (vmask.IsMaskSet()) {
+		ValidityMask new_mask(sel_count);
+		for (idx_t i = 0; i < sel_count; i++) {
+			if (!vmask.RowIsValid(sel.get_index(i))) {
+				new_mask.SetInvalid(i);
+			}
+		}
+		vmask = std::move(new_mask);
+	}
+	FlatVector::SetSize(result, sel_count);
+}
+
 void StructColumnData::Skip(ColumnScanState &state, idx_t count) {
 	validity->Skip(state.child_states[0], count);
 
